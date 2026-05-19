@@ -1,0 +1,27 @@
+# Secrets
+.env
+.env.local
+
+# Database / data
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
