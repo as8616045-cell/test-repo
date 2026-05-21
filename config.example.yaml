@@ -1,0 +1,37 @@
+# =====================================================================
+# Photo -> Live Photo batch workflow configuration
+# Copy to `config.yaml` and tweak.
+# =====================================================================
+
+# I/O folders
+input_dir: "./inbox"            # Drop your photos here (.jpg / .png / .heic)
+output_dir: "./out"             # Live Photo pairs (image + video) land here
+work_dir: "./.cache"            # Temporary downloads (raw mp4)
+
+# Which provider to use: "replicate" or "fal"
+provider: "replicate"
+
+# Which model to call. The CLI maps this to the right provider endpoint.
+# Recommended ranking by quality / dollar (May 2026):
+#   1) wan-2.2-fast  -> Replicate, ~$0.05/video, open SOTA, motion-aware
+#   2) hailuo-02     -> fal.ai,    ~$0.27/6s,    best physics
+#   3) kling-2.1     -> fal.ai,    ~$0.30+,      most "alive" humans
+#   4) wan-2.2       -> Replicate, ~$0.20,       Wan 2.2 full quality
+model: "wan-2.2-fast"
+
+# Generation parameters
+duration_seconds: 5             # Target raw video length (model-dependent)
+resolution: "720p"              # 480p | 720p | 1080p (model-dependent)
+default_prompt: |
+  Continue the natural motion implied by the scene.
+  People should perform realistic, contextually appropriate actions
+  (eating, walking, smiling, blinking, hand gestures).
+  Keep camera mostly static. No teleporting, no morphing, no extra people.
+
+# Live Photo settings (Apple Live Photos are ~3 seconds)
+live_photo_length: 3.0          # Trim generated video to this length
+keep_raw_video: true            # Also save the raw mp4 next to the .mov
+
+# Concurrency
+max_workers: 3                  # How many photos to process in parallel
+retry: 2                        # Retries per photo on transient failures
