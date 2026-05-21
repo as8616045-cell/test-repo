@@ -1,0 +1,16 @@
+# Core: image-to-video API clients (pick one or both)
+replicate>=1.0.0          # Primary provider (Wan 2.2 I2V Fast = $0.05/video)
+fal-client>=0.5.0         # Fallback provider (Wan 2.2 / Hailuo 02 / Kling)
+
+# Live Photo packaging (writes Apple ContentIdentifier metadata)
+makelive>=0.6.0           # Pairs JPEG + MOV into a real Live Photo
+
+# Video processing helpers
+moviepy>=1.0.3            # Trim videos to ~3s (Live Photo native length)
+Pillow>=10.0.0            # Image validation / EXIF
+
+# Convenience
+PyYAML>=6.0               # Config file parser
+tqdm>=4.66.0              # Progress bars
+python-dotenv>=1.0.0      # Load .env for API keys
+requests>=2.31.0          # Download generated videos
