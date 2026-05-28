@@ -59,6 +59,21 @@ export async function render(host) {
     onField: (k, v) => s.fal[k] = v,
   }));
 
+  // ── OpenAI / 中转站
+  insertProvider(providerBlock({
+    title: '🤖 OpenAI / 中转站',
+    desc: '官方 OpenAI（gpt-image-1 / gpt-image-2 / dall-e-3）或任意 OpenAI 兼容中转站（OneAPI / NewAPI / 私有代理）。改 baseURL 即可切换。',
+    helpUrl: 'https://platform.openai.com/api-keys',
+    keyValue: s.openai.apiKey,
+    onKey: v => s.openai.apiKey = v,
+    fields: [
+      { label: 'Base URL', key: 'baseURL', val: s.openai.baseURL, hint: '官方：https://api.openai.com；中转站填中转站域名（不含 /v1）' },
+      { label: '视觉/聊天模型', key: 'visionModel', val: s.openai.visionModel, hint: '反推 + LLM 改写用，如 gpt-4o / gpt-4o-mini' },
+      { label: '生图模型', key: 'imageModel', val: s.openai.imageModel, hint: 'gpt-image-1 / gpt-image-2 / dall-e-3 等中转站支持的型号' },
+    ],
+    onField: (k, v) => s.openai[k] = v,
+  }));
+
 
   // ── Preferred providers
   const prefs = document.createElement('div');

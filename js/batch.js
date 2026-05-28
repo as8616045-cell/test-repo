@@ -1,5 +1,4 @@
 // js/batch.js — concurrent task queue with progress.
-// Used by all pages that need to process N items.
 
 import { loadSettings } from './settings.js';
 
@@ -9,14 +8,10 @@ import { loadSettings } from './settings.js';
  * @param {T[]} items
  * @param {(item: T, idx: number, signal: AbortSignal) => Promise<R>} worker
  * @param {object} opts
- * @param {number} [opts.concurrency]
- * @param {(state: BatchState<T,R>) => void} [opts.onUpdate]
- * @param {AbortSignal} [opts.signal]
  * @returns {Promise<BatchResult<T,R>[]>}
  */
 export async function runBatch(items, worker, { concurrency, onUpdate, signal } = {}) {
   const limit = concurrency || loadSettings().concurrency || 3;
-  /** @type {BatchResult<T,R>[]} */
   const results = items.map((item, i) => ({
     index: i, item, status: 'pending', result: null, error: null,
   }));
@@ -46,12 +41,3 @@ export async function runBatch(items, worker, { concurrency, onUpdate, signal } 
   await Promise.all(workers);
   return results;
 }
-
-/**
- * @typedef BatchResult
- * @property {number} index
- * @property {*} item
- * @property {'pending'|'running'|'done'|'error'} status
- * @property {*} result
- * @property {string|null} error
- */
