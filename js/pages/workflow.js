@@ -8,7 +8,7 @@
 //   - 槽位的指令支持 @图片N 引用语法，点击 chip 自动插入
 
 import { esc, toast, uid, urlToDataURL, timestampedName, copyText, download } from '../utils.js';
-import { stepFrame, subCard, endpointSelect, imageDropzone, previewImage } from '../components.js';
+import { stepFrame, subCard, endpointPicker, imageDropzone, previewImage } from '../components.js';
 import { runBatch } from '../batch.js';
 import { addHistory } from '../storage.js';
 import * as API from '../api/index.js';
@@ -127,23 +127,23 @@ function buildPromptSubCard(state, onChange) {
 
   // The big textarea ✨
   const ta = document.createElement('textarea');
-  ta.className = 'form-textarea prompt-main';
+  ta.className = 'form-textarea prompt-box';
   ta.rows = 8;
   ta.placeholder = '例：{model} 穿着 {outfit}，置身于 {scene}，电影感光影，专业摄影';
   ta.value = state.promptTemplate;
   ta.oninput = () => { state.promptTemplate = ta.value; onChange(); };
   card.body.appendChild(ta);
 
-  // Rewrite row: button + endpoint selector + status
+  // Rewrite row: button + endpoint picker + status
   const actions = document.createElement('div');
   actions.className = 'flex flex-wrap gap-2 items-center mt-3';
-  const provSel = endpointSelect('llm');
-  provSel.style.maxWidth = '260px';
-  if (state.llmEndpointId) provSel.value = state.llmEndpointId;
-  provSel.onchange = () => state.llmEndpointId = provSel.value;
+  const provSel = endpointPicker('llm', {
+    initialId: state.llmEndpointId,
+    onChange: id => state.llmEndpointId = id,
+  });
   actions.innerHTML = `
     <button class="btn-primary" data-act="rewrite">✨ LLM 改写润色</button>
-    <span class="text-xs text-slate-500">用：</span>
+    <span class="text-xs text-slate-500">用</span>
   `;
   actions.appendChild(provSel);
   const undoBtn = document.createElement('button');
@@ -205,14 +205,14 @@ function buildReverseSubCard(state, onChange) {
 
   const row = document.createElement('div');
   row.className = 'flex flex-wrap gap-2 items-center mt-3';
-  const provSel = endpointSelect('llm');
-  provSel.style.maxWidth = '260px';
-  if (state.llmEndpointId) provSel.value = state.llmEndpointId;
-  provSel.onchange = () => state.llmEndpointId = provSel.value;
+  const provSel = endpointPicker('llm', {
+    initialId: state.llmEndpointId,
+    onChange: id => state.llmEndpointId = id,
+  });
   row.innerHTML = `
     <button class="btn-primary" data-act="run">反推 → 替换</button>
     <button class="btn-ghost" data-act="append">反推 → 追加</button>
-    <span class="text-xs text-slate-500">用：</span>
+    <span class="text-xs text-slate-500">用</span>
   `;
   row.appendChild(provSel);
   const status = document.createElement('span');
@@ -230,7 +230,7 @@ function buildReverseSubCard(state, onChange) {
       const { provider, text } = await API.reverseImage(
         state.reverseImages.map(f => f.dataURL), null, { endpointId: provSel.value },
       );
-      const ta = document.querySelector('textarea.prompt-main');
+      const ta = document.querySelector('textarea.prompt-box');
       if (ta) {
         ta.value = append && ta.value.trim() ? (ta.value + '\n' + text) : text;
         state.promptTemplate = ta.value;
@@ -259,8 +259,8 @@ function buildPromptListSubCard(state, onChange) {
     badge: '可选',
   });
   const ta = document.createElement('textarea');
-  ta.className = 'form-textarea';
-  ta.rows = 5;
+  ta.className = 'form-textarea prompt-box';
+  ta.rows = 8;
   ta.placeholder = '留空 = 用上方主 prompt\n或：\nwoman in white dress, beach\nwoman in red gown, palace';
   ta.value = state.promptList;
   ta.oninput = () => { state.promptList = ta.value; onChange(); };
@@ -332,8 +332,8 @@ function buildSlotSubCard(state, def, onChange) {
   instrWrap.appendChild(chipsHost);
 
   const instr = document.createElement('textarea');
-  instr.className = 'form-textarea';
-  instr.rows = 3;
+  instr.className = 'form-textarea prompt-box';
+  instr.rows = 8;
   instr.placeholder = '例：' + def.defaultInstruction;
   instr.value = slot.instruction;
   instr.oninput = () => { slot.instruction = instr.value; onChange(); };
@@ -389,8 +389,8 @@ function buildSlotSubCard(state, def, onChange) {
     }
     if (slot.mode === 'text') {
       const ta = document.createElement('textarea');
-      ta.className = 'form-textarea';
-      ta.rows = 3;
+      ta.className = 'form-textarea prompt-box';
+      ta.rows = 8;
       ta.placeholder = def.placeholder;
       ta.value = slot.text;
       ta.oninput = () => { slot.text = ta.value; onChange(); };
@@ -421,16 +421,16 @@ function buildGenerationStep(state) {
   const paramsCard = subCard('生成参数');
   const paramsBody = paramsCard.body;
 
-  // Endpoint (image)
+  // Endpoint (image) — 智能 picker:
+  //   0 个: 显示 ⚠ + 去设置链接
+  //   1 个: 显示"使用 [name]"纯文本（不再有"无可用端点"那种废下拉）
+  //   ≥2 个: 显示真实下拉
   const provFieldWrap = document.createElement('div');
   provFieldWrap.innerHTML = `<label class="form-label">端点（生图 / 编辑）</label>`;
-  const provSel = endpointSelect('image');
-  if (state.imageEndpointId) provSel.value = state.imageEndpointId;
-  provSel.onchange = () => {
-    state.imageEndpointId = provSel.value;
-    // 工作流的端点切换是临时覆盖，不写回 settings.capabilities
-    // （要长期改默认端点请去「设置」→「能力指派」）
-  };
+  const provSel = endpointPicker('image', {
+    initialId: state.imageEndpointId,
+    onChange: id => state.imageEndpointId = id,
+  });
   provFieldWrap.appendChild(provSel);
   paramsBody.appendChild(provFieldWrap);
 
