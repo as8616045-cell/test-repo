@@ -70,7 +70,12 @@ async function runFalModel(modelPath, input, { onProgress, signal } = {}) {
 
 /** fal.ai 不擅长反推提示词（一般要用 LLaVA/Florence 等模型，模型路径不固定），暂不实现 */
 export async function reverseImage() {
-  throw new Error('fal.ai 适配器暂未实现反推提示词，请改用火山方舟或 Gemini');
+  throw new Error('fal.ai 适配器暂未实现反推提示词，请改用火山方舟 / Gemini / OpenAI');
+}
+
+/** fal.ai 没有标准聊天模型，明确不支持文本改写 */
+export async function chatText() {
+  throw new Error('fal.ai 适配器不支持纯文本 LLM，请改用火山方舟 / Gemini / OpenAI');
 }
 
 /**
@@ -111,5 +116,6 @@ export async function generateVideo({ prompt, image, duration = 5 } = {}, opts =
 export const meta = {
   name: 'fal.ai',
   signupUrl: 'https://fal.ai/dashboard/keys',
+  // 注意：不声明 vision / chat，避免在反推/改写下拉里出现
   capabilities: ['image', 'edit', 'video'],
 };
