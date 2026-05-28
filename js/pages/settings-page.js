@@ -1,13 +1,17 @@
-// pages/settings-page.js — v4: 单一输入 + 自动识别 + 2 桶能力指派
+// pages/settings-page.js — v4.2
 //
-// 顶部:【添加 API】粘贴 baseURL + apiKey,实时显示自动识别结果。点保存即加入列表。
-// 中部:【已添加的 API】列表,每行有"测试 / 删除"按钮。
-// 下部:【能力指派】只有 2 个桶 —— 🖼️ 图片 / 💬 LLM。
+// 极简两字段表单（Base URL + API Key）+ 静默自动识别 +
+// 高端的端点列表 + 大胆的能力指派两个桶。
+//
+// 设计原则:
+//   · 识别成功（高置信度）才显示厂商徽章；不认识的 URL 完全不打扰用户
+//   · 用户不需要选协议、选预设、选 id —— 系统全部自动决定
+//   · 没数据时给清晰的空态指引,有数据时把列表做成可悬停的卡
 
 import {
   loadSettings, saveSettings, DEFAULT_SETTINGS,
   exportSettings, importSettings, clearKeys,
-  PRESET_ENDPOINTS, BUCKETS, BUCKET_LABELS,
+  BUCKETS,
   addEndpoint, removeEndpoint,
   setCapability, detectProvider,
 } from '../settings.js';
@@ -15,147 +19,136 @@ import { endpointsFor, pingEndpoint, protocolName } from '../api/index.js';
 import { toast, esc, download, readJSONFile } from '../utils.js';
 
 export async function render(host) {
-  host.innerHTML = `
-    <h1 class="text-2xl font-bold mb-1">⚙️ 设置 / API</h1>
-    <p class="text-slate-500 mb-5">
-      只填 baseURL + apiKey,系统按 URL 自动识别厂商和协议。<br/>
-      所有数据只保存在本机 localStorage,不会上传到任何服务器。
-    </p>
-  `;
-
   let s = structuredClone(loadSettings());
+
+  /* ───────────────────── Hero ───────────────────── */
+
+  host.innerHTML = `
+    <div class="page-hero">
+      <h1>
+        <span class="hero-icon">⚙️</span>
+        <span>设置</span>
+      </h1>
+      <p class="lead">
+        粘贴 <code class="kbd">Base URL</code> 和 <code class="kbd">API Key</code>,系统会自动识别厂商。<br/>
+        所有 Key 只保存在本机,绝不会上传到任何服务器。
+      </p>
+    </div>
+  `;
 
   /* ───────────────────── ① 添加 API ───────────────────── */
 
   const addCard = document.createElement('div');
   addCard.className = 'card mb-5';
   addCard.innerHTML = `
-    <h2 class="text-base font-semibold mb-1">添加 API</h2>
-    <p class="text-sm text-slate-500 mb-3">
-      粘贴 baseURL + apiKey 即可。无论是 OpenAI / 谷歌 / 火山方舟 / DeepSeek / 硅基流动 / fal.ai 还是任意 OneAPI / NewAPI 中转站,系统都会自动识别。
-    </p>
-
-    <label class="form-label">Base URL</label>
-    <input class="form-input" data-role="baseURL" placeholder="https://api.openai.com  /  https://ark.cn-beijing.volces.com/api/v3  /  ..." />
-
-    <div class="flex flex-wrap gap-1 mt-2" data-role="quick-fill">
-      <span class="text-xs text-slate-400 mr-1 self-center">快速粘贴:</span>
+    <div class="flex items-start justify-between mb-1">
+      <div>
+        <div class="card-title"><span>🔗</span><span>添加 API</span></div>
+        <p class="card-desc">填好两项就能用 — 别的不用管</p>
+      </div>
     </div>
 
-    <label class="form-label mt-3">API Key</label>
-    <input type="password" class="form-input" data-role="apiKey" placeholder="粘贴此处" autocomplete="off" />
+    <div class="mt-5 space-y-4">
+      <div>
+        <label class="form-label">Base URL</label>
+        <input class="form-input mono" data-role="baseURL"
+               placeholder="https://api.openai.com" autocomplete="off" spellcheck="false" />
+        <div class="mt-2 min-h-[20px]" data-role="detect-line"></div>
+      </div>
 
-    <div class="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200" data-role="detect-box">
-      <span class="text-sm text-slate-400">↳ 在上方填入 Base URL 后,这里会显示自动识别结果</span>
-    </div>
+      <div>
+        <label class="form-label">API Key</label>
+        <input type="password" class="form-input mono" data-role="apiKey"
+               placeholder="sk-... / 粘贴你的 Key" autocomplete="off" />
+      </div>
 
-    <div class="flex flex-wrap gap-2 items-center mt-3">
-      <button class="btn-primary" data-act="save">+ 保存到列表</button>
-      <button class="btn-ghost" data-act="test">💚 先测试再保存</button>
-      <span class="text-xs" data-role="status"></span>
+      <div class="flex flex-wrap gap-2 items-center pt-1">
+        <button class="btn-primary" data-act="save">+ 添加</button>
+        <button class="btn-ghost" data-act="test">先测试</button>
+        <span class="text-xs ml-auto" data-role="status"></span>
+      </div>
     </div>
   `;
   host.appendChild(addCard);
 
-  const $base    = addCard.querySelector('[data-role=baseURL]');
-  const $key     = addCard.querySelector('[data-role=apiKey]');
-  const $detect  = addCard.querySelector('[data-role=detect-box]');
-  const $status  = addCard.querySelector('[data-role=status]');
-  const $quick   = addCard.querySelector('[data-role=quick-fill]');
+  const $base   = addCard.querySelector('[data-role=baseURL]');
+  const $key    = addCard.querySelector('[data-role=apiKey]');
+  const $line   = addCard.querySelector('[data-role=detect-line]');
+  const $status = addCard.querySelector('[data-role=status]');
 
-  // 快速粘贴按钮 —— 帮用户填 baseURL
-  for (const p of PRESET_ENDPOINTS) {
-    const b = document.createElement('button');
-    b.className = 'chip-ref';
-    b.style.fontFamily = 'inherit';
-    b.title = p.baseURL;
-    b.textContent = `${p.icon} ${p.name}`;
-    b.onclick = () => {
-      $base.value = p.baseURL;
-      refreshDetection();
-      $key.focus();
-    };
-    $quick.appendChild(b);
-  }
-
+  /**
+   * 自动识别条 —— 只在高置信度时显示徽章；
+   * 没识别出来 / 输入为空 时静默。这样用户不会被"未知"或"低置信度"打扰。
+   */
   function refreshDetection() {
     const url = $base.value.trim();
-    if (!url) {
-      $detect.innerHTML = '<span class="text-sm text-slate-400">↳ 在上方填入 Base URL 后,这里会显示自动识别结果</span>';
-      return;
-    }
+    if (!url) { $line.innerHTML = ''; return; }
     const det = detectProvider(url);
-    const protoLabel = ({ openai: 'OpenAI 兼容', gemini: 'Google Gemini', fal: 'fal.ai 队列' })[det.protocol] || det.protocol;
-    const confDot = det.confidence === 'high' ? '<span class="text-emerald-600">●</span>'
-                  : det.confidence === 'low'  ? '<span class="text-amber-500">●</span>'
-                  :                              '<span class="text-slate-300">●</span>';
-    const confText = det.confidence === 'high' ? '高置信度匹配'
-                   : det.confidence === 'low'  ? '低置信度 — 假定为 OpenAI 兼容（中转站）'
-                   :                              '';
-    $detect.innerHTML = `
-      <div class="flex items-center gap-2 text-sm">
-        ${confDot}
-        <span class="text-2xl">${esc(det.icon)}</span>
-        <div>
-          <div class="font-medium text-slate-700">识别为 <b>${esc(det.name)}</b></div>
-          <div class="text-xs text-slate-500">协议: ${esc(protoLabel)} · ${esc(confText)}</div>
-        </div>
-      </div>
-    `;
+    if (det.confidence === 'high') {
+      $line.innerHTML = `
+        <span class="pill pill-violet">
+          <span class="text-base leading-none">${esc(det.icon)}</span>
+          ${esc(det.name)}
+        </span>
+      `;
+    } else {
+      // 未知 URL: 假定为 OpenAI 兼容,给一个非常含蓄的提示
+      $line.innerHTML = `
+        <span class="text-xs text-slate-400">将作为 OpenAI 兼容 API 处理</span>
+      `;
+    }
   }
   $base.oninput = refreshDetection;
   refreshDetection();
 
-  function buildEndpointFromForm() {
+  function readForm() {
     const baseURL = $base.value.trim();
     const apiKey  = $key.value.trim();
-    if (!baseURL) throw new Error('请填 Base URL');
-    if (!apiKey)  throw new Error('请填 API Key');
-    const det = detectProvider(baseURL);
-    return {
-      baseURL,
-      apiKey,
-      name: det.name,
-      protocol: 'auto',  // 走自动识别
-      _detected: det,
-    };
+    if (!baseURL) { $base.focus(); throw new Error('请填 Base URL'); }
+    if (!apiKey)  { $key.focus();  throw new Error('请填 API Key'); }
+    return { baseURL, apiKey, det: detectProvider(baseURL) };
+  }
+
+  function rerender() {
+    s = structuredClone(loadSettings());
+    renderEndpointList();
+    renderCapabilityRows();
   }
 
   addCard.querySelector('[data-act=save]').onclick = () => {
-    let info; try { info = buildEndpointFromForm(); } catch (e) { return toast(e.message, 'warn'); }
-    const ep = addEndpoint({ name: info.name, baseURL: info.baseURL, apiKey: info.apiKey, protocol: info.protocol });
+    let info; try { info = readForm(); } catch (e) { return toast(e.message, 'warn'); }
+    const ep = addEndpoint({
+      name: info.det.name,
+      baseURL: info.baseURL,
+      apiKey: info.apiKey,
+      protocol: 'auto',
+    });
+    // 自动指派 — 哪个桶还没指派就指到这个新端点 + 默认模型
     s = structuredClone(loadSettings());
-    // 自动设置默认能力指派（如果对应桶还没指派,把它指到这个新端点 + 默认模型）
-    const det = info._detected;
-    if (!s.capabilities.llm.endpointId && det.defaultModels?.llm) {
-      setCapability('llm', ep.id, det.defaultModels.llm);
+    if (!s.capabilities.llm.endpointId && info.det.defaultModels?.llm) {
+      setCapability('llm', ep.id, info.det.defaultModels.llm);
     }
-    if (!s.capabilities.image.endpointId && det.defaultModels?.image) {
-      setCapability('image', ep.id, det.defaultModels.image);
+    if (!s.capabilities.image.endpointId && info.det.defaultModels?.image) {
+      setCapability('image', ep.id, info.det.defaultModels.image);
     }
-    s = structuredClone(loadSettings());
-    // 重置表单
     $base.value = ''; $key.value = '';
     refreshDetection();
-    $status.className = 'text-xs text-emerald-600';
-    $status.textContent = `✓ 已添加 ${ep.name}`;
-    setTimeout(() => $status.textContent = '', 3000);
-    renderEndpointList();
-    renderCapabilityRows();
+    $status.innerHTML = `<span class="text-emerald-600">✓ 已添加 ${esc(ep.name)}</span>`;
+    setTimeout(() => $status.innerHTML = '', 3000);
+    rerender();
     toast(`已添加 ${ep.name}`, 'success');
   };
 
   addCard.querySelector('[data-act=test]').onclick = async () => {
-    let info; try { info = buildEndpointFromForm(); } catch (e) { return toast(e.message, 'warn'); }
-    $status.className = 'text-xs text-slate-500';
-    $status.textContent = '⏳ 测试中…';
+    let info; try { info = readForm(); } catch (e) { return toast(e.message, 'warn'); }
+    $status.innerHTML = '<span class="text-slate-500"><span class="spinner"></span> 测试中…</span>';
     try {
-      const msg = await pingEndpoint({ id: '_form', name: info.name, baseURL: info.baseURL, apiKey: info.apiKey, protocol: 'auto' });
-      $status.className = 'text-xs text-emerald-600';
-      $status.textContent = '✓ ' + msg;
+      const msg = await pingEndpoint({
+        id: '_form', name: info.det.name, baseURL: info.baseURL, apiKey: info.apiKey, protocol: 'auto',
+      });
+      $status.innerHTML = `<span class="text-emerald-600">✓ ${esc(msg)}</span>`;
     } catch (e) {
-      $status.className = 'text-xs text-red-600';
-      $status.textContent = '✗ ' + (e.message || String(e));
+      $status.innerHTML = `<span class="text-red-600">✗ ${esc(e.message || String(e))}</span>`;
     }
   };
 
@@ -164,9 +157,9 @@ export async function render(host) {
   const listCard = document.createElement('div');
   listCard.className = 'card mb-5';
   listCard.innerHTML = `
-    <h2 class="text-base font-semibold mb-1">已添加的 API</h2>
-    <p class="text-sm text-slate-500 mb-3">下方"能力指派"会从这里挑选具体哪一家干哪一件事。</p>
-    <div data-role="ep-list" class="space-y-2"></div>
+    <div class="card-title"><span>🗂️</span><span>已添加的 API</span></div>
+    <p class="card-desc mb-4">下方"能力指派"会从这里挑选用哪一家</p>
+    <div data-role="ep-list" class="space-y-2.5"></div>
   `;
   host.appendChild(listCard);
   const epList = listCard.querySelector('[data-role=ep-list]');
@@ -174,7 +167,13 @@ export async function render(host) {
   function renderEndpointList() {
     epList.innerHTML = '';
     if (!s.endpoints.length) {
-      epList.innerHTML = '<p class="text-sm text-slate-400 py-4 text-center">还没添加任何 API。在上方"添加 API"开始。</p>';
+      epList.innerHTML = `
+        <div class="empty-state">
+          <div class="icon-circle">🪐</div>
+          <div class="title">还没添加任何 API</div>
+          <div class="desc">填好上方 Base URL + Key 即可开始</div>
+        </div>
+      `;
       return;
     }
     for (const ep of s.endpoints) {
@@ -185,59 +184,64 @@ export async function render(host) {
   function buildEndpointRow(ep) {
     const det = detectProvider(ep.baseURL);
     const block = document.createElement('div');
-    block.className = 'sub-card flex flex-wrap items-center gap-3';
+    block.className = 'endpoint-row';
     block.dataset.epId = ep.id;
     block.innerHTML = `
-      <div class="text-2xl flex-shrink-0">${esc(det.icon)}</div>
+      <div class="ep-icon">${esc(det.icon)}</div>
       <div class="flex-1 min-w-0">
-        <div class="font-medium text-slate-700 truncate">${esc(ep.name || det.name)}</div>
-        <div class="text-xs text-slate-500 truncate">${esc(ep.baseURL)}</div>
-        <div class="text-xs text-slate-400">协议: ${esc(protocolName(ep))}</div>
+        <div class="ep-name">${esc(ep.name || det.name)}</div>
+        <div class="ep-url">${esc(ep.baseURL)}</div>
+        <div class="ep-meta">
+          <span class="pill pill-slate">${esc(protocolName(ep))}</span>
+          <span class="text-xs" data-role="ping"></span>
+        </div>
       </div>
-      <div class="flex items-center gap-1.5 flex-shrink-0">
-        <span class="text-xs text-slate-500" data-role="ping"></span>
-        <button class="btn-ghost text-xs" data-act="test">测试</button>
-        <button class="btn-ghost text-xs text-red-600" data-act="remove">× 删除</button>
+      <div class="flex items-center gap-1 flex-shrink-0">
+        <button class="btn-ghost" data-act="test" title="测试连通性">
+          <span>💚</span>
+          <span class="hidden sm:inline">测试</span>
+        </button>
+        <button class="btn-ghost danger" data-act="remove" title="删除">×</button>
       </div>
     `;
     block.querySelector('[data-act=test]').onclick = async () => {
       const $p = block.querySelector('[data-role=ping]');
-      $p.className = 'text-xs text-slate-500';
-      $p.textContent = '⏳';
+      $p.innerHTML = '<span class="spinner"></span> 测试中…';
       try {
         const msg = await pingEndpoint(ep);
-        $p.className = 'text-xs text-emerald-600';
-        $p.textContent = '✓ ' + msg;
+        $p.innerHTML = `<span class="status-dot ok mr-1.5"></span><span class="text-emerald-600">${esc(msg)}</span>`;
       } catch (e) {
-        $p.className = 'text-xs text-red-600';
-        $p.textContent = '✗ ' + (e.message || String(e));
+        $p.innerHTML = `<span class="status-dot error mr-1.5"></span><span class="text-red-600">${esc(e.message || String(e))}</span>`;
       }
     };
     block.querySelector('[data-act=remove]').onclick = () => {
-      if (!confirm(`删除 ${ep.name}？任何指向它的能力指派会回退到第一个可用端点。`)) return;
+      if (!confirm(`删除「${ep.name}」?\n任何指向它的能力指派会自动回退到第一个可用端点。`)) return;
       removeEndpoint(ep.id);
-      s = structuredClone(loadSettings());
-      renderEndpointList();
-      renderCapabilityRows();
+      rerender();
       toast('已删除', 'success');
     };
     return block;
   }
 
-  /* ───────────────────── ③ 能力指派（只有 2 个桶） ───────────────────── */
+  /* ───────────────────── ③ 能力指派（仅 2 桶） ───────────────────── */
 
   const capCard = document.createElement('div');
   capCard.className = 'card mb-5';
   capCard.innerHTML = `
-    <h2 class="text-base font-semibold mb-1">能力指派</h2>
-    <p class="text-sm text-slate-500 mb-3">
-      只分两类:<b>图片 API</b>（生图 / 编辑 / 视频）和 <b>LLM API</b>（提示词改写 + 反推图片,文字或多模态都行）。<br/>
-      下拉只显示协议支持该类型的端点（比如 fal.ai 不会出现在 LLM 下拉里）。
+    <div class="card-title"><span>🎯</span><span>能力指派</span></div>
+    <p class="card-desc mb-4">
+      只分两类:<b class="text-slate-700">LLM</b>(反推 + 改写,文字或多模态)和 <b class="text-slate-700">图片</b>(生图 + 编辑 + 视频)。<br/>
+      下拉只显示协议支持该类型的端点 — 比如 fal.ai 不会出现在 LLM 下拉里。
     </p>
     <div class="space-y-3" data-role="cap-rows"></div>
   `;
   host.appendChild(capCard);
   const capRows = capCard.querySelector('[data-role=cap-rows]');
+
+  const BUCKET_META = {
+    llm:   { icon: '💬', name: 'LLM',   tag: '反推 + 改写' },
+    image: { icon: '🖼️', name: '图片',  tag: '生图 + 编辑 + 视频' },
+  };
 
   function renderCapabilityRows() {
     capRows.innerHTML = '';
@@ -250,12 +254,16 @@ export async function render(host) {
   function buildCapabilityRow(bucket) {
     const eps = endpointsFor(bucket);
     const cur = s.capabilities[bucket] || { endpointId: '', model: '' };
+    const meta = BUCKET_META[bucket];
     const wrap = document.createElement('div');
-    wrap.className = 'grid grid-cols-1 md:grid-cols-[180px_1fr_1fr] gap-2 items-end';
+    wrap.className = 'capability-card';
     wrap.innerHTML = `
       <div>
-        <label class="form-label">${esc(BUCKET_LABELS[bucket])}</label>
-        <p class="text-xs text-slate-400">${bucket === 'llm' ? '反推 + 改写' : '生图 + 编辑 + 视频'}</p>
+        <div class="cap-label">
+          <span class="text-lg leading-none">${esc(meta.icon)}</span>
+          <span>${esc(meta.name)}</span>
+        </div>
+        <div class="cap-hint">${esc(meta.tag)}</div>
       </div>
       <div>
         <label class="form-label">端点</label>
@@ -263,7 +271,7 @@ export async function render(host) {
       </div>
       <div>
         <label class="form-label">模型</label>
-        <input class="form-input" data-role="model" value="${esc(cur.model || '')}" placeholder="${esc(modelPlaceholder(bucket))}" />
+        <input class="form-input mono" data-role="model" value="${esc(cur.model || '')}" placeholder="${esc(modelPlaceholder(bucket))}" />
       </div>
     `;
     const $ep    = wrap.querySelector('[data-role=ep]');
@@ -271,7 +279,7 @@ export async function render(host) {
 
     if (!eps.length) {
       const o = document.createElement('option');
-      o.textContent = '（无支持的端点 — 请先在上方添加 API）';
+      o.textContent = '— 还没添加支持此类型的 API —';
       o.disabled = true; o.selected = true;
       $ep.appendChild(o);
       $ep.disabled = true;
@@ -291,7 +299,6 @@ export async function render(host) {
     function commit() {
       const epId = $ep.value;
       let model = $model.value.trim();
-      // 端点切换且模型为空 → 用该端点厂商的默认模型回填
       if (!model) {
         const ep = s.endpoints.find(e => e.id === epId);
         const det = detectProvider(ep?.baseURL || '');
@@ -301,11 +308,7 @@ export async function render(host) {
       setCapability(bucket, epId, model);
       s = structuredClone(loadSettings());
     }
-    $ep.onchange = () => {
-      // 切端点时,模型清空让 commit() 自动回填默认
-      $model.value = '';
-      commit();
-    };
+    $ep.onchange    = () => { $model.value = ''; commit(); };
     $model.onchange = commit;
 
     return wrap;
@@ -316,12 +319,19 @@ export async function render(host) {
   const genCard = document.createElement('div');
   genCard.className = 'card mb-5';
   genCard.innerHTML = `
-    <h2 class="text-base font-semibold mb-2">通用</h2>
-    <label class="form-label">并发数（批量任务同时跑几个）</label>
-    <input id="conc" type="number" min="1" max="10" class="form-input max-w-xs" value="${s.concurrency}" />
-    <label class="form-label mt-3">CORS 代理（可选,少数 API 浏览器调不通时用）</label>
-    <input id="proxy" class="form-input" placeholder="例: https://your-worker.workers.dev" value="${esc(s.corsProxy || '')}" />
-    <p class="text-xs text-slate-500 mt-1">推荐自部署一个 Cloudflare Worker。</p>
+    <div class="card-title"><span>🛠️</span><span>通用</span></div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+      <div>
+        <label class="form-label">并发数</label>
+        <input id="conc" type="number" min="1" max="10" class="form-input" value="${s.concurrency}" />
+        <p class="text-xs text-slate-500 mt-1">批量任务同时跑几个</p>
+      </div>
+      <div>
+        <label class="form-label">CORS 代理（可选）</label>
+        <input id="proxy" class="form-input mono" placeholder="https://your-worker.workers.dev" value="${esc(s.corsProxy || '')}" />
+        <p class="text-xs text-slate-500 mt-1">少数 API 浏览器调不通时用,推荐自部署 Cloudflare Worker</p>
+      </div>
+    </div>
   `;
   genCard.querySelector('#conc').onchange  = e => { s.concurrency = +e.target.value || 3; saveSettings(s); };
   genCard.querySelector('#proxy').onchange = e => { s.corsProxy = e.target.value.trim();  saveSettings(s); };
@@ -330,13 +340,14 @@ export async function render(host) {
   /* ───────────────────── ⑤ 操作栏 ───────────────────── */
 
   const bar = document.createElement('div');
-  bar.className = 'card flex flex-wrap gap-2';
+  bar.className = 'card flex flex-wrap gap-2 items-center';
   bar.innerHTML = `
-    <button id="export" class="btn-ghost">导出 JSON</button>
-    <button id="import" class="btn-ghost">导入 JSON</button>
+    <button id="export" class="btn-ghost">↓ 导出 JSON</button>
+    <button id="import" class="btn-ghost">↑ 导入 JSON</button>
     <input  id="file"   type="file" accept=".json,application/json" class="hidden" />
-    <button id="clear"  class="btn-ghost text-red-600">清除全部 Key</button>
-    <button id="reset"  class="btn-ghost text-red-600">重置（清空所有数据）</button>
+    <span class="flex-1"></span>
+    <button id="clear"  class="btn-ghost danger">清除全部 Key</button>
+    <button id="reset"  class="btn-ghost danger">重置</button>
   `;
   host.appendChild(bar);
 
@@ -356,14 +367,13 @@ export async function render(host) {
     } catch (err) { toast('导入失败: ' + err.message, 'error'); }
   };
   bar.querySelector('#clear').onclick = () => {
-    if (!confirm('清除全部 API Key？端点和能力指派会保留。')) return;
+    if (!confirm('清除全部 API Key?\n端点和能力指派会保留。')) return;
     clearKeys();
-    s = structuredClone(loadSettings());
-    renderEndpointList();
+    rerender();
     toast('已清除', 'success');
   };
   bar.querySelector('#reset').onclick = () => {
-    if (!confirm('重置所有设置？所有 API、Key 和能力指派都会被清空。')) return;
+    if (!confirm('重置所有设置?\n所有 API、Key 和能力指派都会被清空。')) return;
     saveSettings(structuredClone(DEFAULT_SETTINGS));
     toast('已重置', 'success');
     setTimeout(() => location.reload(), 600);
@@ -376,7 +386,7 @@ export async function render(host) {
 
 function modelPlaceholder(bucket) {
   return ({
-    llm:   '如 doubao-seed-1-6-vision-250815 / gpt-4o / gemini-2.5-flash / deepseek-chat',
-    image: '如 doubao-seedream-4-0-250828 / gpt-image-1 / Kwai-Kolors/Kolors / fal-ai/flux-pro/kontext',
+    llm:   'doubao-seed-1-6-vision-250815 / gpt-4o / gemini-2.5-flash',
+    image: 'doubao-seedream-4-0-250828 / gpt-image-1 / Kwai-Kolors/Kolors',
   })[bucket] || '';
 }
