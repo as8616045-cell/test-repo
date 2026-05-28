@@ -1,6 +1,6 @@
 // js/settings.js — manages API keys + provider preferences in localStorage
 
-const STORAGE_KEY = 'ai-studio:settings:v2';
+const STORAGE_KEY = 'ai-studio:settings:v3';
 
 // Default schema. Add new providers here as we extend.
 export const DEFAULT_SETTINGS = {
@@ -29,9 +29,16 @@ export const DEFAULT_SETTINGS = {
   // OpenAI 官方 / 任意 OpenAI 兼容中转站（OneAPI / NewAPI / 直接代理 等）
   openai: {
     apiKey:  '',
-    baseURL: 'https://api.openai.com',  // 中转站请改成例如 https://your-proxy.com
+    baseURL: 'https://api.openai.com',
     visionModel: 'gpt-4o',
-    imageModel:  'gpt-image-1',         // 也可填 gpt-image-2 / dall-e-3 等中转站支持的模型
+    imageModel:  'gpt-image-1',
+  },
+
+  // DeepSeek - 国内主流文本 LLM（用于改写润色，不生图）
+  deepseek: {
+    apiKey: '',
+    baseURL: 'https://api.deepseek.com',
+    chatModel: 'deepseek-chat',  // 或 deepseek-reasoner
   },
 
   // 默认服务商选择（每个能力可选一家）
@@ -40,6 +47,7 @@ export const DEFAULT_SETTINGS = {
     image:   'volcengine',
     edit:    'volcengine',
     video:   'volcengine',
+    chat:    'volcengine',  // prompt 改写默认用火山豆包
   },
 
   concurrency: 3,
@@ -52,9 +60,10 @@ export function loadSettings() {
   if (_cache) return _cache;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    // also try migrating from v1 if v2 is empty
-    const v1 = !raw ? localStorage.getItem('ai-studio:settings:v1') : null;
-    const seed = raw || v1;
+    // also try migrating from older versions
+    const v2 = !raw ? localStorage.getItem('ai-studio:settings:v2') : null;
+    const v1 = !raw && !v2 ? localStorage.getItem('ai-studio:settings:v1') : null;
+    const seed = raw || v2 || v1;
     if (seed) {
       _cache = deepMerge(structuredClone(DEFAULT_SETTINGS), JSON.parse(seed));
     } else {
@@ -93,6 +102,7 @@ export function clearKeys() {
   s.gemini.apiKey = '';
   s.fal.apiKey = '';
   s.openai.apiKey = '';
+  s.deepseek.apiKey = '';
   saveSettings(s);
 }
 
