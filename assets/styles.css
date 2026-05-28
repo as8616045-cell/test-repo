@@ -1,0 +1,86 @@
+/* AI Studio — minimal custom styles on top of Tailwind */
+
+.nav-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: rgb(51 65 85);
+  transition: all 0.15s ease;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+.nav-btn:hover {
+  background: rgb(245 243 255);
+  color: rgb(124 58 237);
+}
+.nav-btn.active {
+  background: rgb(237 233 254);
+  color: rgb(109 40 217);
+  font-weight: 600;
+}
+
+/* Drop-zone for image upload */
+.dropzone {
+  border: 2px dashed rgb(203 213 225);
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: rgb(248 250 252);
+}
+.dropzone:hover, .dropzone.dragover {
+  border-color: rgb(124 58 237);
+  background: rgb(245 243 255);
+}
+
+/* Toast */
+.toast {
+  background: white;
+  border-left: 4px solid;
+  padding: 12px 16px;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+  min-width: 280px;
+  font-size: 14px;
+  animation: slideIn .25s ease;
+}
+.toast.success { border-color: rgb(34 197 94); }
+.toast.error   { border-color: rgb(239 68 68); }
+.toast.info    { border-color: rgb(59 130 246); }
+.toast.warn    { border-color: rgb(245 158 11); }
+
+@keyframes slideIn {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(124,58,237,0.25);
+  border-top-color: rgb(124 58 237);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Image card hover */
+.img-card { transition: transform .15s ease; }
+.img-card:hover { transform: translateY(-2px); }
+
+/* Form helper */
+.form-label { @apply block text-sm font-medium text-slate-700 mb-1; }
+.form-input { @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:ring-2 focus:ring-brand-100 focus:outline-none; }
+.form-textarea { @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:ring-2 focus:ring-brand-100 focus:outline-none; }
+.btn-primary { @apply px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition; }
+.btn-ghost { @apply px-3 py-1.5 rounded-lg text-sm text-slate-600 hover:bg-slate-100 transition; }
+
+.card { @apply bg-white rounded-xl border border-slate-200 p-5 shadow-sm; }
+
+.kbd { @apply px-1.5 py-0.5 text-xs bg-slate-100 border border-slate-300 rounded font-mono; }
