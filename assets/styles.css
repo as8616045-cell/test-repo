@@ -231,9 +231,12 @@
 
 /* ─── Generation params controls ─────────────────────────────── */
 
-/* The main prompt textarea is intentionally tall, narrower than its parent
- * frame, and resizable on both axes（用户可以横向拉宽,默认是父容器宽度 - 16px）. */
-textarea.prompt-main {
+/* ─── Prompt textareas (large, two-axis resizable) ─────────────────
+ *
+ * Applied to: 主 Prompt 模板、提示词列表、槽位文字、槽位指令 —— 全部统一一样大。
+ * 默认比父容器窄 16px（视觉上能看到外框）,可两向拖拉。
+ */
+textarea.prompt-box {
   min-height: 200px;
   font-size: 14px;
   line-height: 1.6;
@@ -290,4 +293,28 @@ textarea.prompt-main {
   background: rgb(245 243 255);
   color: rgb(109 40 217);
   font-weight: 600;
+}
+
+
+
+/* ─── Sticky sidebar (左栏跟随滚动) ───────────────────────────────
+ *
+ * 配合 index.html 上 aside 的 sticky / h-screen / self-start。
+ * align-self: flex-start 防止被 flex 容器拉伸到全长。
+ */
+aside.app-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+}
+
+/* ─── Compact dropzone thumbnails: contain（不裁剪）+ 浅底 ─────────
+ *
+ * 反推子卡 / 槽位 上传图缩略图用 object-contain 保证完整展示,
+ * 用 bg-slate-100 给"留白"一个色,横纵比不同的图都能看完整。
+ */
+.dz-thumb-contain {
+  object-fit: contain;
+  background-color: rgb(241 245 249);
 }

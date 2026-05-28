@@ -57,6 +57,83 @@ export function section(title, contentNode, subtitle) {
   return s;
 }
 
+/* ───────────────────────── Endpoint picker (smart) ───────────────────────── */
+
+/**
+ * 自适应端点选择器,行为根据可用端点数量自动调整:
+ *
+ *   0 个: 显示"⚠ 无可用端点 · 去设置添加 →"链接（点击切到设置 tab）
+ *   1 个: 显示"使用 [端点名]"纯文本（无下拉,因为没得选）
+ *   ≥2 个: 显示下拉,与 endpointSelect 一致
+ *
+ * 这样工作流页面就不会再出现一个"无可用端点"的废下拉了。
+ *
+ * 返回 { el, value }:
+ *   el    - DOM 元素（已挂好事件）
+ *   value - 当前选中的 endpointId（实时读取,getter）
+ *
+ * 用法:
+ *   const picker = endpointPicker('llm', {
+ *     initialId: state.llmEndpointId,
+ *     onChange: id => state.llmEndpointId = id,
+ *   });
+ *   container.appendChild(picker.el);
+ *   // 后续: API.x({...}, { endpointId: picker.value })
+ */
+export function endpointPicker(bucket, { initialId, onChange } = {}) {
+  const list = endpointsFor(bucket);
+  const wrap = document.createElement('span');
+  wrap.className = 'inline-flex items-center gap-1.5';
+  wrap.dataset.kiroBucket = bucket;
+
+  // ── 0 个: 链接到设置
+  if (list.length === 0) {
+    wrap.innerHTML = `
+      <span class="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded">
+        ⚠ 无可用端点
+      </span>
+      <a href="#settings" class="text-xs text-brand-600 hover:underline">去设置添加 →</a>
+    `;
+    Object.defineProperty(wrap, 'value', { get: () => '', set: () => {} });
+    return wrap;
+  }
+
+  // ── 1 个: 静态文本（不再是下拉）
+  if (list.length === 1) {
+    const ep = list[0];
+    const keyTag = ep.apiKey
+      ? ''
+      : ' <span class="text-amber-600">（未填 Key）</span>';
+    wrap.innerHTML = `
+      <span class="text-xs text-slate-500">使用</span>
+      <span class="text-xs font-medium text-slate-700">${esc(ep.name)}</span>${keyTag}
+    `;
+    Object.defineProperty(wrap, 'value', { get: () => ep.id, set: () => {} });
+    return wrap;
+  }
+
+  // ── ≥2 个: 真下拉
+  const validInitial = initialId && list.some(ep => ep.id === initialId);
+  const sel = document.createElement('select');
+  sel.className = 'form-input';
+  sel.style.maxWidth = '260px';
+  sel.style.fontSize = '13px';
+  for (const ep of list) {
+    const o = document.createElement('option');
+    o.value = ep.id;
+    o.textContent = ep.name + (ep.apiKey ? '' : '（未填 Key）');
+    sel.appendChild(o);
+  }
+  sel.value = validInitial ? initialId : list[0].id;
+  sel.onchange = () => onChange?.(sel.value);
+  wrap.appendChild(sel);
+  Object.defineProperty(wrap, 'value', {
+    get: () => sel.value,
+    set: v => { if (list.some(ep => ep.id === v)) sel.value = v; },
+  });
+  return wrap;
+}
+
 /* ───────────────────────── Endpoint select ───────────────────────── */
 
 /**
@@ -129,7 +206,7 @@ export function imageDropzone({
       <div class="text-slate-500" data-role="hint">点击或拖拽图片到此处${multiple ? '（可多张）' : ''}</div>
       <input id="${id}" type="file" accept="${accept}" ${multiple ? 'multiple' : ''} class="hidden" />
     </label>
-    <div data-role="thumbs" class="grid ${compact ? 'grid-cols-3' : 'grid-cols-3 sm:grid-cols-4'} gap-2 mt-2"></div>
+    <div data-role="thumbs" class="grid ${compact ? 'grid-cols-4 sm:grid-cols-5' : 'grid-cols-3 sm:grid-cols-4'} gap-2 mt-2"></div>
   `;
   const input = el.querySelector('input');
   const dz = el.querySelector('label.dropzone');
@@ -137,7 +214,7 @@ export function imageDropzone({
   const hint = el.querySelector('[data-role=hint]');
 
   let files = [...(initial || [])];
-  const thumbHeight = compact ? 'h-16' : 'h-24';
+  const thumbHeight = compact ? 'h-14' : 'h-24';
 
   function render() {
     thumbs.innerHTML = '';
@@ -145,7 +222,7 @@ export function imageDropzone({
       const c = document.createElement('div');
       c.className = 'relative group';
       c.innerHTML = `
-        <img src="${f.dataURL}" class="w-full ${thumbHeight} object-cover rounded-md border border-slate-200" />
+        <img src="${f.dataURL}" class="w-full ${thumbHeight} dz-thumb-contain rounded-md border border-slate-200" />
         <button class="absolute top-0.5 right-0.5 bg-black/70 text-white text-[10px] leading-none rounded-full w-5 h-5 flex items-center justify-center opacity-0 group-hover:opacity-100" title="删除">×</button>
       `;
       c.querySelector('button').onclick = (ev) => {
