@@ -47,7 +47,7 @@ async function http(path, body, { signal } = {}) {
  * @param {string} instruction - 自定义指令
  * @returns {Promise<string>}
  */
-export async function reverseImage(imageDataURLs, instruction) {
+export async function reverseImage(imageDataURLs, instruction, { signal } = {}) {
   const c = cfg();
   const imgs = Array.isArray(imageDataURLs) ? imageDataURLs : [imageDataURLs];
   const content = [
@@ -58,7 +58,18 @@ export async function reverseImage(imageDataURLs, instruction) {
     model: c.visionModel,
     messages: [{ role: 'user', content }],
     temperature: 0.4,
-  });
+  }, { signal });
+  return r.choices?.[0]?.message?.content?.trim() || '';
+}
+
+/** 纯文本 LLM 调用（用于 prompt 改写润色等任务） */
+export async function chatText(text, { signal } = {}) {
+  const c = cfg();
+  const r = await http('/chat/completions', {
+    model: c.visionModel,
+    messages: [{ role: 'user', content: text }],
+    temperature: 0.6,
+  }, { signal });
   return r.choices?.[0]?.message?.content?.trim() || '';
 }
 
@@ -84,7 +95,7 @@ function defaultReversePrompt() {
  * @param {number} [opts.n]
  * @returns {Promise<{images: string[]}>} images are http URLs
  */
-export async function generateImage({ prompt, referenceImages = [], size = '1024x1024', n = 1 } = {}) {
+export async function generateImage({ prompt, referenceImages = [], size = '1024x1024', n = 1 } = {}, { signal } = {}) {
   const c = cfg();
   const body = {
     model: c.imageModel,
@@ -98,7 +109,7 @@ export async function generateImage({ prompt, referenceImages = [], size = '1024
     body.image = referenceImages.length === 1 ? referenceImages[0] : referenceImages;
     body.sequential_image_generation = 'disabled';
   }
-  const r = await http('/images/generations', body);
+  const r = await http('/images/generations', body, { signal });
   const urls = (r.data || []).map(d => d.url).filter(Boolean);
   return { images: urls, raw: r };
 }
@@ -107,8 +118,8 @@ export async function generateImage({ prompt, referenceImages = [], size = '1024
  * 图像编辑（用即梦 4.0 同接口完成"换产品 / 换背景"）。
  * 这是 Seedream 4.0 的「图像编辑」能力 —— 把多张图作为参考喂入 + 自然语言指令。
  */
-export async function editImage({ prompt, images = [], size = '1024x1024' } = {}) {
-  return generateImage({ prompt, referenceImages: images, size, n: 1 });
+export async function editImage({ prompt, images = [], size = '1024x1024', n = 1 } = {}, { signal } = {}) {
+  return generateImage({ prompt, referenceImages: images, size, n }, { signal });
 }
 
 /**
@@ -155,5 +166,5 @@ async function getVideoTask(id) {
 export const meta = {
   name: '火山方舟 (Volcengine)',
   signupUrl: 'https://www.volcengine.com/product/ark',
-  capabilities: ['vision', 'image', 'edit', 'video'],
+  capabilities: ['vision', 'image', 'edit', 'video', 'chat'],
 };
