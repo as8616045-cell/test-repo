@@ -1,7 +1,7 @@
 // js/components.js — small reusable UI helpers (no framework)
 
 import { fileToDataURL, esc, download, toast, copyText } from './utils.js';
-import { PROVIDER_LIST, providersFor } from './api/index.js';
+import { endpointsFor } from './api/index.js';
 import { loadSettings } from './settings.js';
 
 /* ───────────────────────── Layout primitives ───────────────────────── */
@@ -57,34 +57,43 @@ export function section(title, contentNode, subtitle) {
   return s;
 }
 
-/* ───────────────────────── Provider select ───────────────────────── */
+/* ───────────────────────── Endpoint select ───────────────────────── */
 
 /**
- * Provider dropdown filtered by capability.
- * Only providers whose meta.capabilities includes `capability` are shown.
- * Default selection comes from settings.preferred[capability] (if it supports it).
+ * Endpoint dropdown filtered by capability. v4 替代 providerSelect.
+ *
+ * 列表来自 endpointsFor(capability) —— 自动过滤掉不支持该能力的协议
+ * （比如 fal.ai 协议不会出现在 vision/chat 下拉里）。
+ *
+ * 默认选中 = settings.capabilities[capability].endpointId（如果它支持该能力）；
+ * 否则选第一个可用端点。
+ *
+ * 返回的 <select> 上挂了一个 dataset.kiroCap 标记，方便上层在 settings 变化时重渲染。
  */
-export function providerSelect(capability) {
-  const list = providersFor(capability);
+export function endpointSelect(capability) {
+  const list = endpointsFor(capability);
   const s = loadSettings();
-  let cur = s.preferred[capability];
-  if (!list.find(p => p.id === cur)) cur = list[0]?.id || '';
+  const cur = s.capabilities?.[capability]?.endpointId;
   const sel = document.createElement('select');
   sel.className = 'form-input';
+  sel.dataset.kiroCap = capability;
   if (!list.length) {
     const o = document.createElement('option');
-    o.textContent = '（无可用服务商）';
+    o.textContent = '（无可用端点，请先在「设置」添加并填 Key）';
     o.disabled = true; o.selected = true;
     sel.appendChild(o);
     sel.disabled = true;
-  } else {
-    list.forEach(p => {
-      const o = document.createElement('option');
-      o.value = p.id; o.textContent = p.name;
-      if (p.id === cur) o.selected = true;
-      sel.appendChild(o);
-    });
+    return sel;
   }
+  let matched = false;
+  for (const ep of list) {
+    const o = document.createElement('option');
+    o.value = ep.id;
+    o.textContent = ep.name + (ep.apiKey ? '' : '（未填 Key）');
+    if (ep.id === cur) { o.selected = true; matched = true; }
+    sel.appendChild(o);
+  }
+  if (!matched) sel.value = list[0].id;
   return sel;
 }
 

@@ -1,64 +1,90 @@
-// js/api/index.js — unified API router. Picks provider from settings.
-// Each adapter exposes:
-//   reverseImage(imageDataURLs, instruction, { signal })   [requires meta.capabilities.includes('vision')]
-//   chatText(text, { signal })                              [requires 'chat']
-//   generateImage({ prompt, referenceImages, size, n }, { signal })  [requires 'image']
-//   editImage({ prompt, images, size, n }, { signal })      [requires 'edit']
-//   generateVideo({ prompt, image, ... }, { signal, onProgress })  [requires 'video']
-//   meta = { name, signupUrl, capabilities: [...] }
+// js/api/index.js — v4 unified API router
+//
+// 架构：
+//   3 个协议层（protocols/openai.js / gemini.js / fal.js）—— 纯函数，接 endpoint 参数
+//   端点 + 能力指派从 settings 读
+//   detectProtocol(endpoint) 按 baseURL 自动识别协议（支持手动覆盖）
+//
+// 调用形态：
+//   API.reverseImage(images, instr, override?, runOpts?)
+//   API.rewritePrompt(text,           override?, customInstr?, runOpts?)
+//   API.generateImage(opts,           override?, runOpts?)
+//   API.editImage(opts,               override?, runOpts?)
+//   API.generateVideo(opts,           override?, runOpts?)
+//
+// override = undefined         → 用 settings.capabilities[cap]
+// override = { endpointId, model? } → 临时切换端点（model 不传则用默认能力的 model）
 
-import * as volcengine from './volcengine.js';
-import * as gemini from './gemini.js';
-import * as fal from './fal.js';
-import * as openai from './openai.js';
-import * as deepseek from './deepseek.js';
-import * as siliconflow from './siliconflow.js';
-import { loadSettings } from '../settings.js';
+import * as openaiP from './protocols/openai.js';
+import * as geminiP from './protocols/gemini.js';
+import * as falP    from './protocols/fal.js';
+import { loadSettings, getEndpoint } from '../settings.js';
 
-export const PROVIDERS = { volcengine, gemini, fal, openai, deepseek, siliconflow };
+const PROTOCOLS = {
+  openai: openaiP,
+  gemini: geminiP,
+  fal:    falP,
+};
 
-export const PROVIDER_LIST = [
-  { id: 'volcengine',  name: '火山方舟（即梦 4.0 / 豆包视觉 / Seedance）' },
-  { id: 'siliconflow', name: '硅基流动（DeepSeek / Qwen-VL / Kolors / Flux 等聚合）' },
-  { id: 'openai',      name: 'OpenAI / 中转站（gpt-image / dall-e）' },
-  { id: 'gemini',      name: 'Google Gemini（视觉 + Nano Banana）' },
-  { id: 'deepseek',    name: 'DeepSeek（仅文本改写润色）' },
-  { id: 'fal',         name: 'fal.ai（Flux Kontext / Kling 等）' },
-];
+/* ───────────────── protocol detection ───────────────── */
 
-/** List providers that support a given capability. Used by providerSelect to filter. */
-export function providersFor(capability) {
-  return PROVIDER_LIST.filter(p => {
-    const caps = PROVIDERS[p.id]?.meta?.capabilities || [];
-    return caps.includes(capability);
-  });
-}
-
-function pick(capability, override) {
-  const s = loadSettings();
-  let id = override || s.preferred[capability];
-  let p = PROVIDERS[id];
-  // If chosen provider doesn't support this capability, fall back to the first one that does.
-  const caps = p?.meta?.capabilities || [];
-  if (!p || !caps.includes(capability)) {
-    const fallback = providersFor(capability)[0];
-    if (!fallback) throw new Error(`没有任何服务商支持 "${capability}" 能力`);
-    id = fallback.id;
-    p = PROVIDERS[id];
+export function detectProtocol(endpoint) {
+  if (!endpoint) return 'openai';
+  if (endpoint.protocol && endpoint.protocol !== 'auto') {
+    return endpoint.protocol;
   }
-  return { id, p };
+  const url = (endpoint.baseURL || '').toLowerCase();
+  if (/generativelanguage\.googleapis\.com/.test(url)) return 'gemini';
+  if (/queue\.fal\.run|fal\.ai|fal\.run/.test(url)) return 'fal';
+  return 'openai'; // 默认 OpenAI 兼容（OpenAI官方 / DeepSeek / SiliconFlow / 火山方舟 / OneAPI / NewAPI / 任意中转站）
 }
 
-/** 反推提示词 */
-export async function reverseImage(imageDataURLs, instruction, providerId, runOpts = {}) {
-  const { id, p } = pick('vision', providerId);
-  return { provider: id, text: await p.reverseImage(imageDataURLs, instruction, runOpts) };
+export function getProtocol(endpoint) {
+  return PROTOCOLS[detectProtocol(endpoint)];
 }
 
-/** LLM 文本改写（纯文本，不需要传图） */
-export async function rewritePrompt(originalPrompt, providerId, customInstruction, runOpts = {}) {
-  const { id, p } = pick('chat', providerId);
-  if (!p.chatText) throw new Error(`服务商 ${id} 不支持文本改写`);
+/* ───────────────── capability resolver ───────────────── */
+
+function resolve(capability, override) {
+  const s = loadSettings();
+  const cap = s.capabilities?.[capability];
+  if (!cap) throw new Error(`未知能力 "${capability}"`);
+
+  const endpointId = override?.endpointId || cap.endpointId;
+  const model = override?.model || cap.model;
+
+  const endpoint = s.endpoints.find(e => e.id === endpointId);
+  if (!endpoint) {
+    throw new Error(`未找到端点 "${endpointId}"。请到「设置」检查能力指派`);
+  }
+  if (!endpoint.apiKey) {
+    throw new Error(`端点「${endpoint.name}」还没填 API Key`);
+  }
+  const proto = getProtocol(endpoint);
+  if (!proto) {
+    throw new Error(`端点「${endpoint.name}」无法识别协议`);
+  }
+  if (!proto.meta.capabilities.includes(capability)) {
+    throw new Error(`端点「${endpoint.name}」（${proto.meta.name}）不支持「${capability}」能力`);
+  }
+  if (!model) {
+    throw new Error(`能力「${capability}」未指定模型，请到「设置」填写`);
+  }
+  return { endpoint, model, proto };
+}
+
+/* ───────────────── public API ───────────────── */
+
+/** 反推提示词（vision） */
+export async function reverseImage(imageDataURLs, instruction, override, runOpts = {}) {
+  const { endpoint, model, proto } = resolve('vision', override);
+  const text = await proto.reverseImage(endpoint, model, imageDataURLs, instruction, runOpts);
+  return { provider: endpoint.name, text };
+}
+
+/** 改写润色（chat） */
+export async function rewritePrompt(originalPrompt, override, customInstruction, runOpts = {}) {
+  const { endpoint, model, proto } = resolve('chat', override);
   const instruction = customInstruction || [
     '你是一名 AI 生图 prompt 工程师。',
     '请把下面这段 prompt 改写得更具体、更有画面感（增加镜头、光线、材质、构图等细节），',
@@ -67,26 +93,52 @@ export async function rewritePrompt(originalPrompt, providerId, customInstructio
     '原 prompt：',
     originalPrompt,
   ].join('\n');
-  return { provider: id, text: await p.chatText(instruction, runOpts) };
+  const text = await proto.chatText(endpoint, model, instruction, runOpts);
+  return { provider: endpoint.name, text };
 }
 
-/** 生图（文/图生图，统一入口；adapter 内部根据 referenceImages 是否非空切换路径） */
-export async function generateImage(opts, providerId, runOpts = {}) {
-  const { id, p } = pick('image', providerId);
-  const r = await p.generateImage(opts, runOpts);
-  return { provider: id, ...r };
+/** 生图 */
+export async function generateImage(opts, override, runOpts = {}) {
+  const { endpoint, model, proto } = resolve('image', override);
+  const r = await proto.generateImage(endpoint, model, opts, runOpts);
+  return { provider: endpoint.name, ...r };
 }
 
-/** 图像编辑（多图参考 + 自然语言指令） */
-export async function editImage(opts, providerId, runOpts = {}) {
-  const { id, p } = pick('edit', providerId);
-  const r = await p.editImage(opts, runOpts);
-  return { provider: id, ...r };
+/** 图像编辑 */
+export async function editImage(opts, override, runOpts = {}) {
+  const { endpoint, model, proto } = resolve('edit', override);
+  const r = await proto.editImage(endpoint, model, opts, runOpts);
+  return { provider: endpoint.name, ...r };
 }
 
 /** 视频生成 */
-export async function generateVideo(opts, providerId, runOpts = {}) {
-  const { id, p } = pick('video', providerId);
-  const r = await p.generateVideo(opts, runOpts);
-  return { provider: id, ...r };
+export async function generateVideo(opts, override, runOpts = {}) {
+  const { endpoint, model, proto } = resolve('video', override);
+  const r = await proto.generateVideo(endpoint, model, opts, runOpts);
+  return { provider: endpoint.name, ...r };
+}
+
+/* ───────────────── helpers for UI ───────────────── */
+
+/** 列出支持指定能力的所有端点（用于工作流的 endpointSelect 和设置页能力指派下拉） */
+export function endpointsFor(capability) {
+  const s = loadSettings();
+  return s.endpoints.filter(ep => {
+    const proto = getProtocol(ep);
+    return proto?.meta?.capabilities?.includes(capability);
+  });
+}
+
+/** 测试连通性 */
+export async function pingEndpoint(endpoint) {
+  const ep = typeof endpoint === 'string' ? getEndpoint(endpoint) : endpoint;
+  if (!ep) throw new Error('端点不存在');
+  const proto = getProtocol(ep);
+  if (!proto?.meta?.ping) throw new Error('该协议不支持连通性测试');
+  return proto.meta.ping(ep);
+}
+
+/** 给定端点列出协议名称（UI 用） */
+export function protocolName(endpoint) {
+  return getProtocol(endpoint)?.meta?.name || 'Unknown';
 }

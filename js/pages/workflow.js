@@ -7,12 +7,12 @@
 //   - 每个槽位有自己的"指令"输入框，让模型明确知道这个槽位是干嘛的
 //   - 槽位的指令支持 @图片N 引用语法，点击 chip 自动插入
 
-import { fileToDataURL, esc, toast, uid, urlToDataURL, timestampedName, copyText, download } from '../utils.js';
-import { stepFrame, subCard, providerSelect, imageDropzone, previewImage } from '../components.js';
+import { esc, toast, uid, urlToDataURL, timestampedName, copyText, download } from '../utils.js';
+import { stepFrame, subCard, endpointSelect, imageDropzone, previewImage } from '../components.js';
 import { runBatch } from '../batch.js';
 import { addHistory } from '../storage.js';
 import * as API from '../api/index.js';
-import { loadSettings, updateSettings } from '../settings.js';
+import { loadSettings } from '../settings.js';
 
 /* ──────────────────────────── Constants ──────────────────────────── */
 
@@ -60,8 +60,10 @@ export async function render(host) {
   const settings = loadSettings();
   const state = {
     // generation params
-    provider: settings.preferred.image,
-    rewriterProvider: settings.preferred.chat || settings.preferred.vision,
+    // override 端点（仅本次会话有效，不写回 settings.capabilities）
+    imageEndpointId:   settings.capabilities.image?.endpointId   || '',
+    chatEndpointId:    settings.capabilities.chat?.endpointId    || '',
+    visionEndpointId:  settings.capabilities.vision?.endpointId  || '',
     quality: '1k',
     ratio: '1:1',
     n: DEFAULT_N,
@@ -132,13 +134,13 @@ function buildPromptSubCard(state, onChange) {
   ta.oninput = () => { state.promptTemplate = ta.value; onChange(); };
   card.body.appendChild(ta);
 
-  // Rewrite row: button + provider selector + status
+  // Rewrite row: button + endpoint selector + status
   const actions = document.createElement('div');
   actions.className = 'flex flex-wrap gap-2 items-center mt-3';
-  const provSel = providerSelect('chat');
+  const provSel = endpointSelect('chat');
   provSel.style.maxWidth = '260px';
-  provSel.value = state.rewriterProvider;
-  provSel.onchange = () => state.rewriterProvider = provSel.value;
+  if (state.chatEndpointId) provSel.value = state.chatEndpointId;
+  provSel.onchange = () => state.chatEndpointId = provSel.value;
   actions.innerHTML = `
     <button class="btn-primary" data-act="rewrite">✨ LLM 改写润色</button>
     <span class="text-xs text-slate-500">用：</span>
@@ -161,7 +163,7 @@ function buildPromptSubCard(state, onChange) {
     hint.textContent = '';
     try {
       state.lastPromptBeforeRewrite = ta.value;
-      const { provider, text } = await API.rewritePrompt(ta.value, state.rewriterProvider);
+      const { provider, text } = await API.rewritePrompt(ta.value, { endpointId: state.chatEndpointId });
       ta.value = text;
       state.promptTemplate = text;
       undoBtn.classList.remove('hidden');
@@ -203,8 +205,10 @@ function buildReverseSubCard(state, onChange) {
 
   const row = document.createElement('div');
   row.className = 'flex flex-wrap gap-2 items-center mt-3';
-  const provSel = providerSelect('vision');
+  const provSel = endpointSelect('vision');
   provSel.style.maxWidth = '260px';
+  if (state.visionEndpointId) provSel.value = state.visionEndpointId;
+  provSel.onchange = () => state.visionEndpointId = provSel.value;
   row.innerHTML = `
     <button class="btn-primary" data-act="run">反推 → 替换</button>
     <button class="btn-ghost" data-act="append">反推 → 追加</button>
@@ -224,7 +228,7 @@ function buildReverseSubCard(state, onChange) {
     status.textContent = '';
     try {
       const { provider, text } = await API.reverseImage(
-        state.reverseImages.map(f => f.dataURL), null, provSel.value,
+        state.reverseImages.map(f => f.dataURL), null, { endpointId: provSel.value },
       );
       const ta = document.querySelector('textarea.prompt-main');
       if (ta) {
@@ -417,14 +421,15 @@ function buildGenerationStep(state) {
   const paramsCard = subCard('生成参数');
   const paramsBody = paramsCard.body;
 
-  // Provider (image)
+  // Endpoint (image)
   const provFieldWrap = document.createElement('div');
-  provFieldWrap.innerHTML = `<label class="form-label">服务商（生图 / 编辑）</label>`;
-  const provSel = providerSelect('image');
-  provSel.value = state.provider;
+  provFieldWrap.innerHTML = `<label class="form-label">端点（生图 / 编辑）</label>`;
+  const provSel = endpointSelect('image');
+  if (state.imageEndpointId) provSel.value = state.imageEndpointId;
   provSel.onchange = () => {
-    state.provider = provSel.value;
-    updateSettings({ preferred: { image: provSel.value, edit: provSel.value } });
+    state.imageEndpointId = provSel.value;
+    // 工作流的端点切换是临时覆盖，不写回 settings.capabilities
+    // （要长期改默认端点请去「设置」→「能力指派」）
   };
   provFieldWrap.appendChild(provSel);
   paramsBody.appendChild(provFieldWrap);
@@ -644,9 +649,9 @@ function buildGenerationStep(state) {
         let resp;
         if (task.referenceImages.length) {
           opts.images = task.referenceImages;
-          resp = await API.editImage(opts, state.provider, { signal });
+          resp = await API.editImage(opts, { endpointId: state.imageEndpointId }, { signal });
         } else {
-          resp = await API.generateImage(opts, state.provider, { signal });
+          resp = await API.generateImage(opts, { endpointId: state.imageEndpointId }, { signal });
         }
         const dataURLs = await Promise.all((resp.images || []).map(async u => {
           if (typeof u !== 'string') return null;
@@ -674,7 +679,7 @@ function buildGenerationStep(state) {
         id: uid(), kind: 'workflow', createdAt: Date.now(),
         prompt: state.promptTemplate || '[空模板]',
         model: '',
-        provider: state.provider,
+        provider: state.imageEndpointId,
         inputs: collectInputs(state),
         outputs: allOutputs,
         params: {
