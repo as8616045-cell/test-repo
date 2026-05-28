@@ -1,207 +1,372 @@
-// pages/workflow.js — 统一工作流：所有能力组合在一个页面
+// pages/workflow.js — 统一工作流页面（v3）
 //
-// 设计原则：把"反推、文生图、图生图、一致性、换X、批量"全部统一成一组可勾选的步骤，
-// 通过三个槽位（模特/服装/场景）+ prompt 模板 + 批量模式来组合任意需求。
+// 关键改进：
+//   - 主 Prompt 输入框做大（rows=8 + min-height）
+//   - 改写润色支持独立的 chat 服务商（含 DeepSeek）
+//   - 生成参数：分辨率（1K/2K/4K）+ 比例（含横/竖标注）+ 张数按钮组（默认 4）
+//   - 每个槽位有自己的"指令"输入框，让模型明确知道这个槽位是干嘛的
+//   - 槽位的指令支持 @图片N 引用语法，点击 chip 自动插入
 
 import { fileToDataURL, esc, toast, uid, urlToDataURL, timestampedName, copyText, download } from '../utils.js';
-import { providerSelect, previewImage, section } from '../components.js';
+import { stepFrame, subCard, providerSelect, imageDropzone, previewImage } from '../components.js';
 import { runBatch } from '../batch.js';
 import { addHistory } from '../storage.js';
 import * as API from '../api/index.js';
-import { loadSettings } from '../settings.js';
+import { loadSettings, updateSettings } from '../settings.js';
 
-// 三个槽位的语义键
+/* ──────────────────────────── Constants ──────────────────────────── */
+
 const SLOTS = [
-  { key: 'model',  zh: '模特',  emoji: '👤', placeholder: '一位 30 岁亚洲女性，长发，自然妆容' },
-  { key: 'outfit', zh: '服装/产品', emoji: '👗', placeholder: '白色丝绸连衣裙' },
-  { key: 'scene',  zh: '场景/背景', emoji: '🌆', placeholder: '海边日落沙滩，电影感光影' },
+  {
+    key: 'model', zh: '模特', emoji: '👤',
+    placeholder: '一位 30 岁亚洲女性，长发，自然妆容',
+    defaultInstruction: '保持这位模特的脸部、体型与气质完全一致，不要更改其外观。',
+  },
+  {
+    key: 'outfit', zh: '服装 / 产品', emoji: '👗',
+    placeholder: '白色丝绸连衣裙',
+    defaultInstruction: '让模特展示这件产品，保留产品的颜色、形状、材质准确性。',
+  },
+  {
+    key: 'scene', zh: '场景 / 背景', emoji: '🌆',
+    placeholder: '海边日落沙滩，电影感光影',
+    defaultInstruction: '将主体放置在该场景中，光影协调、电商级摄影质感。',
+  },
 ];
 
-const BATCH_MODES = [
-  { id: 'single',   name: '单次（当前配置生 1 组）' },
-  { id: 'repeat',   name: '同 prompt 重复 N 次（生多个变体）' },
-  { id: 'prompts',  name: '不同提示词列表（每行一个 prompt）' },
-  { id: 'combine',  name: '槽位笛卡尔积（多张图自动两两组合）' },
+const QUALITIES = [
+  { id: '1k', label: '1K', shortSide: 1024, hint: '所有服务商支持' },
+  { id: '2k', label: '2K', shortSide: 2048, hint: '部分服务商支持' },
+  { id: '4k', label: '4K', shortSide: 4096, hint: '仅少数服务商支持' },
 ];
+
+const RATIOS = [
+  { id: '1:1',  w: 1,  h: 1,  orient: 'square',    note: '方形' },
+  { id: '16:9', w: 16, h: 9,  orient: 'landscape', note: '横屏 · 影视' },
+  { id: '9:16', w: 9,  h: 16, orient: 'portrait',  note: '竖屏 · 短视频 / 手机' },
+  { id: '4:3',  w: 4,  h: 3,  orient: 'landscape', note: '横屏 · 经典' },
+  { id: '3:4',  w: 3,  h: 4,  orient: 'portrait',  note: '竖屏 · 经典' },
+  { id: '3:2',  w: 3,  h: 2,  orient: 'landscape', note: '横屏 · 摄影' },
+  { id: '2:3',  w: 2,  h: 3,  orient: 'portrait',  note: '竖屏 · 摄影' },
+  { id: '21:9', w: 21, h: 9,  orient: 'landscape', note: '横屏 · 超宽' },
+];
+
+const N_CHOICES = [1, 2, 3, 4];
+const DEFAULT_N = 4;
+
+/* ──────────────────────────── Page entry ──────────────────────────── */
 
 export async function render(host) {
-  // 内部状态
+  const settings = loadSettings();
   const state = {
-    reverseImages: [],            // [{name, dataURL}]
+    // generation params
+    provider: settings.preferred.image,
+    rewriterProvider: settings.preferred.chat || settings.preferred.vision,
+    quality: '1k',
+    ratio: '1:1',
+    n: DEFAULT_N,
+    repeat: 1,
+    note: '',
+    // step 1
     promptTemplate: '',
-    promptList: '',                // 多行
-    slots: {                       // 三个槽位
-      model:  { mode: 'off', text: '', images: [] },
-      outfit: { mode: 'off', text: '', images: [] },
-      scene:  { mode: 'off', text: '', images: [] },
-    },
-    provider: '',                  // 空 = 用 settings 默认
-    size: '1024x1024',
-    n: 1,                          // 每个任务出几张
-    batchMode: 'single',
-    repeatCount: 4,
+    promptList: '',
+    reverseImages: [],
+    lastPromptBeforeRewrite: null,
+    // step 2: each slot has mode/text/images/instruction
+    slots: Object.fromEntries(SLOTS.map(s => [s.key, {
+      mode: 'off', text: '', images: [],
+      instruction: s.defaultInstruction,
+    }])),
+    // run
     aborter: null,
+    isRunning: false,
   };
 
-  host.innerHTML = `<h1 class="text-2xl font-bold mb-1">🎨 工作流</h1>
-    <p class="text-slate-500 mb-5">所有能力（反推 / 文生图 / 图生图 / 一致性 / 换X / 批量）都在这里组合。</p>`;
+  const onChangeListeners = [];
+  const notifyChange = () => onChangeListeners.forEach(fn => { try { fn(); } catch {} });
 
-  // ── ① 反推（可选）
-  host.appendChild(buildReverseStep(state));
-
-  // ── ② Prompt
-  host.appendChild(buildPromptStep(state));
-
-  // ── ③ 三个槽位
-  host.appendChild(buildSlotsStep(state));
-
-  // ── ④ 生成参数
-  host.appendChild(buildParamsStep(state));
-
-  // ── ⑤ 批量模式
-  host.appendChild(buildBatchStep(state));
-
-  // ── ⑥ 运行 + 进度 + 结果
-  host.appendChild(buildRunStep(state));
-}
-
-/* ────────────────────────────────────────────────────────────
- * Step builders
- * ──────────────────────────────────────────────────────────── */
-
-function buildReverseStep(state) {
-  const wrap = document.createElement('details');
-  wrap.className = 'card mb-5';
-  wrap.innerHTML = `
-    <summary class="cursor-pointer font-semibold text-slate-900">① 反推提示词（可选）</summary>
-    <p class="text-sm text-slate-500 mt-1 mb-3">上传参考图，自动反推出 prompt，填到下方主 prompt 框。</p>
-    <div data-role="dz"></div>
-    <div class="flex gap-2 items-center mt-3">
-      <span class="text-sm text-slate-600">服务商：</span>
-      <div data-role="prov"></div>
-      <button class="btn-primary" data-act="reverse">反推 → 填入 prompt</button>
-    </div>
-    <div class="mt-3 text-sm text-slate-600 hidden bg-slate-50 rounded p-3 whitespace-pre-wrap" data-role="out"></div>
+  host.innerHTML = `
+    <h1 class="text-2xl font-bold mb-1">🎨 工作流</h1>
+    <p class="text-slate-500 mb-5">在一个页面内组合：反推 / 文生图 / 图生图 / 一致性 / 换 X / 批量。</p>
   `;
-  const dz = simpleDropzone({ multiple: true, onChange: files => state.reverseImages = files });
-  wrap.querySelector('[data-role=dz]').appendChild(dz.el);
-  const prov = providerSelect('vision');
-  wrap.querySelector('[data-role=prov]').appendChild(prov);
-  const out = wrap.querySelector('[data-role=out]');
 
-  wrap.querySelector('[data-act=reverse]').onclick = async (e) => {
-    if (!state.reverseImages.length) return toast('请先上传参考图', 'warn');
-    const btn = e.currentTarget;
-    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 分析中…';
-    try {
-      const { text } = await API.reverseImage(
-        state.reverseImages.map(f => f.dataURL), null, prov.value
-      );
-      out.classList.remove('hidden');
-      out.textContent = text;
-      // 填到主 prompt（如果是空的，直接放；否则追加）
-      const ta = document.querySelector('[data-role=prompt-template]');
-      if (ta) {
-        ta.value = ta.value ? (ta.value + '\n' + text) : text;
-        state.promptTemplate = ta.value;
-      }
-      toast('已反推并填入 prompt ✅', 'success');
-    } catch (err) {
-      toast(err.message, 'error', 5000);
-    } finally {
-      btn.disabled = false; btn.textContent = '反推 → 填入 prompt';
-    }
+  // ─── Step 1: Prompt
+  const step1 = stepFrame(1, '主 Prompt', '可用占位符 {model} {outfit} {scene} 引用下方槽位。');
+  step1.body.appendChild(buildPromptSubCard(state, notifyChange));
+  step1.body.appendChild(buildReverseSubCard(state, notifyChange));
+  step1.body.appendChild(buildPromptListSubCard(state, notifyChange));
+  host.appendChild(step1.el);
+
+  // ─── Step 2: Slots
+  const step2 = stepFrame(2, '元素槽位', '每个槽位有自己的"指令"，告诉模型这个槽位的图/文是干嘛用的。');
+  for (const def of SLOTS) {
+    step2.body.appendChild(buildSlotSubCard(state, def, notifyChange));
+  }
+  host.appendChild(step2.el);
+
+  // ─── Step 3: Generation (params + run + results)
+  const { el: step3el, render: refreshEstimate } = buildGenerationStep(state);
+  host.appendChild(step3el);
+  onChangeListeners.push(refreshEstimate);
+
+  notifyChange();
+
+  return () => {
+    try { state.aborter?.abort(); } catch {}
   };
-  return wrap;
 }
 
-function buildPromptStep(state) {
-  const wrap = document.createElement('section');
-  wrap.className = 'card mb-5';
-  wrap.innerHTML = `
-    <h2 class="font-semibold text-slate-900">② 主 Prompt</h2>
-    <p class="text-sm text-slate-500 mt-1 mb-3">
-      可用占位符：<span class="kbd">{model}</span> <span class="kbd">{outfit}</span> <span class="kbd">{scene}</span>
-      —— 会被下方槽位的值替换；如槽位提供的是图片，则在 prompt 里替换为提示语并把图作为参考。
-    </p>
-    <textarea data-role="prompt-template" class="form-textarea" rows="5"
-      placeholder="例：{model} 穿着 {outfit}，置身于 {scene}，电影感光影，专业摄影"></textarea>
+/* ──────────────────────────── Step 1: Prompt sub-cards ──────────────────────────── */
 
-    <div class="flex flex-wrap gap-2 mt-3 items-center">
-      <button class="btn-ghost" data-act="rewrite">✨ LLM 改写润色</button>
-      <span class="text-sm text-slate-500">服务商：</span>
-      <div data-role="prov"></div>
-    </div>
+function buildPromptSubCard(state, onChange) {
+  const card = subCard('Prompt 模板', {
+    hint: '使用 {model} {outfit} {scene} 引用槽位；图片型槽位会自动作为参考图传入 API。',
+  });
+
+  // The big textarea ✨
+  const ta = document.createElement('textarea');
+  ta.className = 'form-textarea prompt-main';
+  ta.rows = 8;
+  ta.placeholder = '例：{model} 穿着 {outfit}，置身于 {scene}，电影感光影，专业摄影';
+  ta.value = state.promptTemplate;
+  ta.oninput = () => { state.promptTemplate = ta.value; onChange(); };
+  card.body.appendChild(ta);
+
+  // Rewrite row: button + provider selector + status
+  const actions = document.createElement('div');
+  actions.className = 'flex flex-wrap gap-2 items-center mt-3';
+  const provSel = providerSelect('chat');
+  provSel.style.maxWidth = '260px';
+  provSel.value = state.rewriterProvider;
+  provSel.onchange = () => state.rewriterProvider = provSel.value;
+  actions.innerHTML = `
+    <button class="btn-primary" data-act="rewrite">✨ LLM 改写润色</button>
+    <span class="text-xs text-slate-500">用：</span>
   `;
-  const ta = wrap.querySelector('[data-role=prompt-template]');
-  ta.oninput = () => state.promptTemplate = ta.value;
-  const prov = providerSelect('vision');
-  wrap.querySelector('[data-role=prov]').appendChild(prov);
+  actions.appendChild(provSel);
+  const undoBtn = document.createElement('button');
+  undoBtn.className = 'btn-ghost hidden';
+  undoBtn.dataset.act = 'undo';
+  undoBtn.textContent = '↩ 撤销改写';
+  actions.appendChild(undoBtn);
+  const hint = document.createElement('span');
+  hint.className = 'text-xs text-slate-400';
+  actions.appendChild(hint);
 
-  wrap.querySelector('[data-act=rewrite]').onclick = async (e) => {
+  const rewriteBtn = actions.querySelector('[data-act=rewrite]');
+  rewriteBtn.onclick = async () => {
     if (!ta.value.trim()) return toast('请先输入 prompt', 'warn');
-    const btn = e.currentTarget;
-    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 改写中…';
+    rewriteBtn.disabled = true;
+    rewriteBtn.innerHTML = '<span class="spinner"></span> 改写中…';
+    hint.textContent = '';
     try {
-      const { text } = await API.rewritePrompt(ta.value, prov.value);
+      state.lastPromptBeforeRewrite = ta.value;
+      const { provider, text } = await API.rewritePrompt(ta.value, state.rewriterProvider);
       ta.value = text;
       state.promptTemplate = text;
-      toast('已改写 ✅', 'success');
-    } catch (err) {
-      toast(err.message, 'error', 5000);
+      undoBtn.classList.remove('hidden');
+      hint.textContent = `由 ${provider} 改写`;
+      onChange();
+      toast('已改写', 'success');
+    } catch (e) {
+      toast(e.message, 'error', 5000);
+      hint.textContent = '改写失败';
     } finally {
-      btn.disabled = false; btn.textContent = '✨ LLM 改写润色';
+      rewriteBtn.disabled = false;
+      rewriteBtn.textContent = '✨ LLM 改写润色';
     }
   };
-  return wrap;
-}
-
-function buildSlotsStep(state) {
-  const wrap = document.createElement('section');
-  wrap.className = 'card mb-5';
-  wrap.innerHTML = `
-    <h2 class="font-semibold text-slate-900">③ 元素槽位</h2>
-    <p class="text-sm text-slate-500 mt-1 mb-3">
-      每个槽位独立选模式：<b>不用 / 文字 / 单张图（固定）/ 多张图（批量）</b>。
-      想"只换模特"就把模特设多张，其余设固定；想"全换"就都设多张。
-    </p>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4" data-role="slots-host"></div>
-  `;
-  const slotsHost = wrap.querySelector('[data-role=slots-host]');
-  for (const s of SLOTS) {
-    slotsHost.appendChild(buildSlot(state, s));
-  }
-  return wrap;
-}
-
-function buildSlot(state, def) {
-  const slot = state.slots[def.key];
-  const el = document.createElement('div');
-  el.className = 'border border-slate-200 rounded-lg p-3';
-  el.innerHTML = `
-    <div class="flex items-center gap-2 mb-2">
-      <span class="text-lg">${def.emoji}</span>
-      <h3 class="font-semibold">${esc(def.zh)} <span class="text-xs text-slate-400">{${def.key}}</span></h3>
-    </div>
-    <select class="form-input mb-2" data-role="mode">
-      <option value="off">不使用</option>
-      <option value="text">文字</option>
-      <option value="image">单张图（固定）</option>
-      <option value="images">多张图（批量）</option>
-    </select>
-    <div data-role="body"></div>
-  `;
-  const modeSel = el.querySelector('[data-role=mode]');
-  const body = el.querySelector('[data-role=body]');
-  modeSel.value = slot.mode;
-  modeSel.onchange = () => {
-    slot.mode = modeSel.value;
-    renderBody();
+  undoBtn.onclick = () => {
+    if (state.lastPromptBeforeRewrite != null) {
+      ta.value = state.lastPromptBeforeRewrite;
+      state.promptTemplate = ta.value;
+      state.lastPromptBeforeRewrite = null;
+      undoBtn.classList.add('hidden');
+      hint.textContent = '已撤销';
+      onChange();
+    }
   };
+  card.body.appendChild(actions);
+  return card.el;
+}
+
+function buildReverseSubCard(state, onChange) {
+  const card = subCard('反推（可选）', {
+    hint: '上传参考图 → 反推出 prompt → 写入上方模板（替换 / 追加）。',
+    badge: '可选',
+  });
+  const dz = imageDropzone({
+    multiple: true, compact: true,
+    onChange: files => { state.reverseImages = files; },
+  });
+  card.body.appendChild(dz.el);
+
+  const row = document.createElement('div');
+  row.className = 'flex flex-wrap gap-2 items-center mt-3';
+  const provSel = providerSelect('vision');
+  provSel.style.maxWidth = '260px';
+  row.innerHTML = `
+    <button class="btn-primary" data-act="run">反推 → 替换</button>
+    <button class="btn-ghost" data-act="append">反推 → 追加</button>
+    <span class="text-xs text-slate-500">用：</span>
+  `;
+  row.appendChild(provSel);
+  const status = document.createElement('span');
+  status.className = 'text-xs text-slate-400';
+  row.appendChild(status);
+
+  const runBtn = row.querySelector('[data-act=run]');
+  const appendBtn = row.querySelector('[data-act=append]');
+  async function doReverse(append) {
+    if (!state.reverseImages.length) return toast('请先上传参考图', 'warn');
+    [runBtn, appendBtn].forEach(b => b.disabled = true);
+    runBtn.innerHTML = '<span class="spinner"></span> 分析中…';
+    status.textContent = '';
+    try {
+      const { provider, text } = await API.reverseImage(
+        state.reverseImages.map(f => f.dataURL), null, provSel.value,
+      );
+      const ta = document.querySelector('textarea.prompt-main');
+      if (ta) {
+        ta.value = append && ta.value.trim() ? (ta.value + '\n' + text) : text;
+        state.promptTemplate = ta.value;
+        ta.dispatchEvent(new Event('input'));
+      }
+      status.textContent = `由 ${provider} 反推`;
+      toast('已反推 ✅', 'success');
+      onChange();
+    } catch (e) {
+      toast(e.message, 'error', 5000);
+      status.textContent = '失败';
+    } finally {
+      [runBtn, appendBtn].forEach(b => b.disabled = false);
+      runBtn.textContent = '反推 → 替换';
+    }
+  }
+  runBtn.onclick = () => doReverse(false);
+  appendBtn.onclick = () => doReverse(true);
+  card.body.appendChild(row);
+  return card.el;
+}
+
+function buildPromptListSubCard(state, onChange) {
+  const card = subCard('提示词列表（可选）', {
+    hint: '每行一个 prompt。如非空，将用列表中的每行替代上方主模板。',
+    badge: '可选',
+  });
+  const ta = document.createElement('textarea');
+  ta.className = 'form-textarea';
+  ta.rows = 5;
+  ta.placeholder = '留空 = 用上方主 prompt\n或：\nwoman in white dress, beach\nwoman in red gown, palace';
+  ta.value = state.promptList;
+  ta.oninput = () => { state.promptList = ta.value; onChange(); };
+  card.body.appendChild(ta);
+  return card.el;
+}
+
+/* ──────────────────────────── Step 2: Slots ──────────────────────────── */
+
+function buildSlotSubCard(state, def, onChange) {
+  const slot = state.slots[def.key];
+  const card = subCard(`${def.emoji} ${def.zh}`, { badge: `{${def.key}}` });
+
+  // Mode toggle
+  const modeRow = document.createElement('div');
+  modeRow.className = 'flex flex-wrap gap-2 mb-3';
+  const modes = [
+    { id: 'off',    label: '不使用' },
+    { id: 'text',   label: '文字' },
+    { id: 'image',  label: '单图' },
+    { id: 'images', label: '多图' },
+  ];
+  for (const m of modes) {
+    const b = document.createElement('button');
+    b.className = 'btn-mode';
+    b.dataset.mode = m.id;
+    b.textContent = m.label;
+    if (m.id === slot.mode) b.classList.add('active');
+    b.onclick = () => {
+      slot.mode = m.id;
+      modeRow.querySelectorAll('.btn-mode').forEach(x =>
+        x.classList.toggle('active', x.dataset.mode === m.id));
+      renderBody();
+      renderInstruction();
+      onChange();
+    };
+    modeRow.appendChild(b);
+  }
+  card.body.appendChild(modeRow);
+
+  // Instruction textarea (always visible — works for all modes)
+  const instrWrap = document.createElement('div');
+  instrWrap.className = 'mb-3';
+  const instrLabel = document.createElement('div');
+  instrLabel.className = 'flex items-center justify-between mb-1';
+  instrLabel.innerHTML = `
+    <label class="text-xs font-medium text-slate-600">指令（告诉模型这个槽位的用途）</label>
+    <button class="text-xs text-brand-600 hover:underline" data-act="reset-instr">恢复默认</button>
+  `;
+  instrWrap.appendChild(instrLabel);
+
+  // @图片N chips host (only shown when has images)
+  const chipsHost = document.createElement('div');
+  chipsHost.className = 'flex flex-wrap gap-1 mb-1.5';
+  instrWrap.appendChild(chipsHost);
+
+  const instr = document.createElement('textarea');
+  instr.className = 'form-textarea';
+  instr.rows = 2;
+  instr.placeholder = '例：' + def.defaultInstruction;
+  instr.value = slot.instruction;
+  instr.oninput = () => { slot.instruction = instr.value; onChange(); };
+  instrWrap.appendChild(instr);
+
+  instrLabel.querySelector('[data-act=reset-instr]').onclick = () => {
+    instr.value = def.defaultInstruction;
+    slot.instruction = def.defaultInstruction;
+    onChange();
+  };
+
+  card.body.appendChild(instrWrap);
+
+  function renderInstruction() {
+    // Show @图片N chips when slot has images and is not in text-only mode
+    chipsHost.innerHTML = '';
+    if ((slot.mode === 'image' || slot.mode === 'images') && slot.images.length) {
+      const tip = document.createElement('span');
+      tip.className = 'text-xs text-slate-400 mr-1';
+      tip.textContent = '可引用：';
+      chipsHost.appendChild(tip);
+      slot.images.forEach((f, i) => {
+        const chip = document.createElement('button');
+        chip.className = 'chip-ref';
+        chip.title = f.name || `图 ${i + 1}`;
+        chip.textContent = `@图片${i + 1}`;
+        chip.onclick = () => {
+          // Insert at current cursor position
+          const start = instr.selectionStart ?? instr.value.length;
+          const end = instr.selectionEnd ?? instr.value.length;
+          const token = `@图片${i + 1}`;
+          instr.value = instr.value.slice(0, start) + token + instr.value.slice(end);
+          slot.instruction = instr.value;
+          instr.focus();
+          const pos = start + token.length;
+          instr.setSelectionRange(pos, pos);
+          onChange();
+        };
+        chipsHost.appendChild(chip);
+      });
+    }
+  }
+
+  // Body (text input or image dropzone)
+  const body = document.createElement('div');
+  card.body.appendChild(body);
+
   function renderBody() {
     body.innerHTML = '';
     if (slot.mode === 'off') {
-      body.innerHTML = '<p class="text-xs text-slate-400">不参与本次生成</p>';
+      body.innerHTML = '<p class="text-xs text-slate-400">不参与本次生成（占位符将被清空，指令也不发送）</p>';
       return;
     }
     if (slot.mode === 'text') {
@@ -210,143 +375,187 @@ function buildSlot(state, def) {
       ta.rows = 2;
       ta.placeholder = def.placeholder;
       ta.value = slot.text;
-      ta.oninput = () => slot.text = ta.value;
+      ta.oninput = () => { slot.text = ta.value; onChange(); };
       body.appendChild(ta);
       return;
     }
     // image / images
-    const dz = simpleDropzone({
+    const dz = imageDropzone({
       multiple: slot.mode === 'images',
-      onChange: files => slot.images = files,
+      compact: true,
       initial: slot.images,
+      onChange: files => { slot.images = files; renderInstruction(); onChange(); },
     });
     body.appendChild(dz.el);
   }
+
   renderBody();
-  return el;
+  renderInstruction();
+  return card.el;
 }
 
-function buildParamsStep(state) {
-  const wrap = document.createElement('section');
-  wrap.className = 'card mb-5';
-  wrap.innerHTML = `
-    <h2 class="font-semibold text-slate-900">④ 生成参数</h2>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-      <div>
-        <label class="form-label">服务商</label>
-        <div data-role="prov"></div>
-      </div>
-      <div>
-        <label class="form-label">尺寸</label>
-        <select class="form-input" data-role="size">
-          <option value="1024x1024">1024×1024 (1:1)</option>
-          <option value="1024x1792">1024×1792 (9:16)</option>
-          <option value="1792x1024">1792×1024 (16:9)</option>
-          <option value="1024x1536">1024×1536 (2:3)</option>
-          <option value="1536x1024">1536×1024 (3:2)</option>
-        </select>
-      </div>
-      <div>
-        <label class="form-label">每个任务出几张</label>
-        <input type="number" min="1" max="4" value="1" class="form-input" data-role="n" />
-      </div>
-      <div>
-        <label class="form-label">备注</label>
-        <input type="text" placeholder="可选，方便回看" class="form-input" data-role="note" />
-      </div>
-    </div>
-    <p class="text-xs text-slate-500 mt-2">提示：有任意槽位提供了图片，将走"图生图（编辑）"接口；否则走"文生图"。</p>
-  `;
+/* ──────────────────────────── Step 3: Generation params + Run + Results ──────────────────────────── */
+
+function buildGenerationStep(state) {
+  const step = stepFrame(3, '生成', '配置参数 → 启动 → 查看结果。');
+
+  // ── Params sub-card
+  const paramsCard = subCard('生成参数');
+  const paramsBody = paramsCard.body;
+
+  // Provider (image)
+  const provFieldWrap = document.createElement('div');
+  provFieldWrap.innerHTML = `<label class="form-label">服务商（生图 / 编辑）</label>`;
   const provSel = providerSelect('image');
-  wrap.querySelector('[data-role=prov]').appendChild(provSel);
-  state.provider = provSel.value;
-  provSel.onchange = () => state.provider = provSel.value;
+  provSel.value = state.provider;
+  provSel.onchange = () => {
+    state.provider = provSel.value;
+    updateSettings({ preferred: { image: provSel.value, edit: provSel.value } });
+  };
+  provFieldWrap.appendChild(provSel);
+  paramsBody.appendChild(provFieldWrap);
 
-  const sizeSel = wrap.querySelector('[data-role=size]');
-  sizeSel.value = state.size;
-  sizeSel.onchange = () => state.size = sizeSel.value;
+  // Quality (1K / 2K / 4K)
+  const qualityField = document.createElement('div');
+  qualityField.className = 'mt-3';
+  qualityField.innerHTML = `<label class="form-label">分辨率</label>`;
+  const qualityGroup = document.createElement('div');
+  qualityGroup.className = 'btn-group';
+  for (const q of QUALITIES) {
+    const b = document.createElement('button');
+    b.className = 'btn-mode';
+    b.dataset.q = q.id;
+    b.innerHTML = `<b>${q.label}</b><span class="ml-1 text-[11px] opacity-70">${q.shortSide}px</span>`;
+    if (q.id === state.quality) b.classList.add('active');
+    b.onclick = () => {
+      state.quality = q.id;
+      qualityGroup.querySelectorAll('.btn-mode').forEach(x =>
+        x.classList.toggle('active', x.dataset.q === q.id));
+      qualityHint.textContent = q.hint;
+      sizePreview.textContent = `→ ${computeSize(state.quality, state.ratio).size}`;
+    };
+    qualityGroup.appendChild(b);
+  }
+  qualityField.appendChild(qualityGroup);
+  const qualityHint = document.createElement('p');
+  qualityHint.className = 'text-xs text-slate-500 mt-1';
+  qualityHint.textContent = QUALITIES.find(q => q.id === state.quality)?.hint || '';
+  qualityField.appendChild(qualityHint);
+  paramsBody.appendChild(qualityField);
 
-  const nInput = wrap.querySelector('[data-role=n]');
-  nInput.onchange = () => state.n = Math.max(1, +nInput.value || 1);
+  // Ratio dropdown with orient labels
+  const ratioField = document.createElement('div');
+  ratioField.className = 'mt-3';
+  ratioField.innerHTML = `<label class="form-label">比例</label>`;
+  const ratioSel = document.createElement('select');
+  ratioSel.className = 'form-input';
+  for (const r of RATIOS) {
+    const o = document.createElement('option');
+    o.value = r.id;
+    o.textContent = `${r.id}    —    ${r.note}`;
+    if (r.id === state.ratio) o.selected = true;
+    ratioSel.appendChild(o);
+  }
+  ratioSel.onchange = () => {
+    state.ratio = ratioSel.value;
+    sizePreview.textContent = `→ ${computeSize(state.quality, state.ratio).size}`;
+  };
+  ratioField.appendChild(ratioSel);
+  const sizePreview = document.createElement('p');
+  sizePreview.className = 'text-xs text-slate-500 mt-1 font-mono';
+  sizePreview.textContent = `→ ${computeSize(state.quality, state.ratio).size}`;
+  ratioField.appendChild(sizePreview);
+  paramsBody.appendChild(ratioField);
 
-  const note = wrap.querySelector('[data-role=note]');
-  note.oninput = () => state.note = note.value;
+  // n (per-task images) button group, default 4
+  const nField = document.createElement('div');
+  nField.className = 'mt-3';
+  nField.innerHTML = `<label class="form-label">每个任务出几张</label>`;
+  const nGroup = document.createElement('div');
+  nGroup.className = 'btn-group';
+  for (const n of N_CHOICES) {
+    const b = document.createElement('button');
+    b.className = 'btn-mode';
+    b.dataset.n = n;
+    b.textContent = `${n} 张`;
+    if (n === state.n) b.classList.add('active');
+    b.onclick = () => {
+      state.n = n;
+      nGroup.querySelectorAll('.btn-mode').forEach(x =>
+        x.classList.toggle('active', +x.dataset.n === n));
+    };
+    nGroup.appendChild(b);
+  }
+  nField.appendChild(nGroup);
+  const nHint = document.createElement('p');
+  nHint.className = 'text-xs text-slate-500 mt-1';
+  nHint.textContent = '注：部分服务商单次最多返回 1 张，超出会自动循环调用。';
+  nField.appendChild(nHint);
+  paramsBody.appendChild(nField);
 
-  return wrap;
-}
-
-function buildBatchStep(state) {
-  const wrap = document.createElement('section');
-  wrap.className = 'card mb-5';
-  wrap.innerHTML = `
-    <h2 class="font-semibold text-slate-900">⑤ 批量模式</h2>
-    <div class="space-y-2 mt-3" data-role="modes"></div>
-    <div class="hidden mt-3" data-role="repeat">
+  // repeat + note (small inline row)
+  const lastRow = document.createElement('div');
+  lastRow.className = 'mt-3 grid grid-cols-2 gap-3';
+  lastRow.innerHTML = `
+    <div>
       <label class="form-label">重复次数</label>
-      <input type="number" min="1" max="20" class="form-input max-w-xs" data-role="repeat-n" value="4" />
+      <input type="number" min="1" max="20" class="form-input" value="${state.repeat}" data-role="repeat" />
+      <p class="text-xs text-slate-500 mt-1">同一组合跑 N 遍以挑选最佳变体。</p>
     </div>
-    <div class="hidden mt-3" data-role="prompts">
-      <label class="form-label">不同提示词列表（每行一个，会替换主 prompt 模板）</label>
-      <textarea class="form-textarea" rows="6" data-role="prompts-ta" placeholder="例：&#10;woman in white dress, beach&#10;woman in red gown, palace&#10;woman in jeans, street"></textarea>
+    <div>
+      <label class="form-label">备注（可选）</label>
+      <input type="text" class="form-input" placeholder="方便回看" value="${esc(state.note)}" data-role="note" />
     </div>
   `;
-  const modes = wrap.querySelector('[data-role=modes]');
-  for (const m of BATCH_MODES) {
-    const lb = document.createElement('label');
-    lb.className = 'flex items-start gap-2 cursor-pointer';
-    lb.innerHTML = `
-      <input type="radio" name="batch-mode" value="${m.id}" ${m.id === state.batchMode ? 'checked' : ''} class="mt-1" />
-      <span class="text-sm">${esc(m.name)}</span>
-    `;
-    lb.querySelector('input').onchange = () => {
-      state.batchMode = m.id;
-      renderSubBoxes();
-    };
-    modes.appendChild(lb);
-  }
-  const repeatBox = wrap.querySelector('[data-role=repeat]');
-  const promptsBox = wrap.querySelector('[data-role=prompts]');
-  const renderSubBoxes = () => {
-    repeatBox.classList.toggle('hidden', state.batchMode !== 'repeat');
-    promptsBox.classList.toggle('hidden', state.batchMode !== 'prompts');
+  lastRow.querySelector('[data-role=repeat]').onchange = e => {
+    state.repeat = clamp(+e.target.value || 1, 1, 20);
+    e.target.value = state.repeat;
   };
-  wrap.querySelector('[data-role=repeat-n]').onchange = e => state.repeatCount = +e.target.value || 4;
-  wrap.querySelector('[data-role=prompts-ta]').oninput = e => state.promptList = e.target.value;
-  renderSubBoxes();
-  return wrap;
-}
+  lastRow.querySelector('[data-role=note]').oninput = e => state.note = e.target.value;
+  paramsBody.appendChild(lastRow);
 
-function buildRunStep(state) {
-  const wrap = document.createElement('section');
-  wrap.className = 'card';
-  wrap.innerHTML = `
-    <div class="flex flex-wrap items-center gap-3">
+  step.body.appendChild(paramsCard.el);
+
+  // ── Run sub-card
+  const runCard = subCard('启动');
+  runCard.body.innerHTML = `
+    <div class="flex flex-wrap gap-2 items-center">
       <button class="btn-primary" data-act="run">▶ 运行</button>
       <button class="btn-ghost text-red-600 hidden" data-act="stop">⏹ 停止</button>
-      <span class="text-sm text-slate-500" data-role="estimate"></span>
+      <span class="sub-badge ml-1" data-role="estimate"></span>
     </div>
-    <div class="mt-4 hidden" data-role="progress"></div>
-    <h3 class="font-semibold mt-5 mb-2 hidden" data-role="results-title">结果</h3>
-    <div data-role="results"></div>
+    <div class="mt-3 hidden" data-role="progress"></div>
   `;
-  const estimate = wrap.querySelector('[data-role=estimate]');
-  const updateEstimate = () => {
+  step.body.appendChild(runCard.el);
+
+  // ── Results sub-card (hidden until first run)
+  const resultsCard = subCard('结果');
+  resultsCard.el.classList.add('hidden');
+  const resultsBox = document.createElement('div');
+  resultsBox.className = 'space-y-3';
+  resultsCard.body.appendChild(resultsBox);
+  step.body.appendChild(resultsCard.el);
+
+  const runBtn = runCard.body.querySelector('[data-act=run]');
+  const stopBtn = runCard.body.querySelector('[data-act=stop]');
+  const estimate = runCard.body.querySelector('[data-role=estimate]');
+  const progressBox = runCard.body.querySelector('[data-role=progress]');
+
+  const refreshEstimate = () => {
     try {
       const tasks = composeTasks(state);
-      estimate.textContent = `预计生成 ${tasks.length * (state.n || 1)} 张图（${tasks.length} 个任务 × 每任务 ${state.n} 张）`;
+      const total = tasks.length * (state.n || 1);
+      estimate.textContent = `≈ ${total} 张（${tasks.length} 任务 × ${state.n} 张）`;
+      estimate.style.background = '';
+      estimate.style.color = '';
+      runBtn.disabled = state.isRunning || total === 0;
     } catch (e) {
       estimate.textContent = '⚠ ' + e.message;
+      estimate.style.background = '#fee2e2';
+      estimate.style.color = '#b91c1c';
+      runBtn.disabled = true;
     }
   };
-  // re-estimate periodically (cheap, lazy)
-  setInterval(updateEstimate, 1500);
-  updateEstimate();
-
-  const runBtn = wrap.querySelector('[data-act=run]');
-  const stopBtn = wrap.querySelector('[data-act=stop]');
-  const progressBox = wrap.querySelector('[data-role=progress]');
-  const resultsTitle = wrap.querySelector('[data-role=results-title]');
-  const resultsBox = wrap.querySelector('[data-role=results]');
 
   runBtn.onclick = async () => {
     let tasks;
@@ -354,21 +563,27 @@ function buildRunStep(state) {
     catch (e) { return toast(e.message, 'warn'); }
     if (!tasks.length) return toast('没有可执行的任务', 'warn');
 
-    runBtn.disabled = true; runBtn.innerHTML = '<span class="spinner"></span> 运行中…';
+    state.isRunning = true;
+    state.aborter = new AbortController();
+    runBtn.disabled = true;
+    runBtn.innerHTML = '<span class="spinner"></span> 运行中…';
     stopBtn.classList.remove('hidden');
     progressBox.classList.remove('hidden');
-    resultsTitle.classList.remove('hidden');
+    resultsCard.el.classList.remove('hidden');
     resultsBox.innerHTML = '';
 
-    state.aborter = new AbortController();
-    stopBtn.onclick = () => state.aborter?.abort();
+    stopBtn.onclick = () => {
+      state.aborter?.abort();
+      stopBtn.disabled = true;
+      stopBtn.textContent = '已请求停止…';
+    };
 
     const renderProgress = (s) => {
       const ok = s.results.filter(r => r.status === 'done').length;
       const err = s.results.filter(r => r.status === 'error').length;
       const run = s.results.filter(r => r.status === 'running').length;
       progressBox.innerHTML = `
-        <div class="text-sm">完成 <b>${ok}</b> / 失败 <b class="text-red-600">${err}</b> / 进行中 <b>${run}</b> / 共 ${s.total}</div>
+        <div class="text-sm">完成 <b>${ok}</b> · 失败 <b class="text-red-600">${err}</b> · 进行中 <b>${run}</b> · 共 ${s.total}</div>
         <div class="w-full h-2 bg-slate-200 rounded mt-2 overflow-hidden">
           <div class="h-full bg-brand-500 transition-all" style="width:${(ok / s.total) * 100}%"></div>
         </div>`;
@@ -376,183 +591,231 @@ function buildRunStep(state) {
 
     const allOutputs = [];
     try {
-      const results = await runBatch(tasks, async (task) => {
+      const sizeStr = computeSize(state.quality, state.ratio).size;
+      const results = await runBatch(tasks, async (task, idx, signal) => {
         const opts = {
           prompt: task.prompt,
-          size: state.size,
+          size: sizeStr,
           n: state.n,
-          aspectRatio: aspectOf(state.size),
+          aspectRatio: state.ratio,
         };
         let resp;
         if (task.referenceImages.length) {
           opts.images = task.referenceImages;
-          resp = await API.editImage(opts, state.provider);
+          resp = await API.editImage(opts, state.provider, { signal });
         } else {
-          resp = await API.generateImage(opts, state.provider);
+          resp = await API.generateImage(opts, state.provider, { signal });
         }
-        const dataURLs = await Promise.all(
-          resp.images.map(u => u.startsWith('data:') ? u : urlToDataURL(u))
-        );
-        return { ...resp, dataURLs, task };
+        const dataURLs = await Promise.all((resp.images || []).map(async u => {
+          if (typeof u !== 'string') return null;
+          if (u.startsWith('data:')) return u;
+          try { return await urlToDataURL(u); }
+          catch { return u; }
+        }));
+        return { ...resp, dataURLs: dataURLs.filter(Boolean) };
       }, { onUpdate: renderProgress, signal: state.aborter.signal });
 
-      // Render results: each task -> a card with its prompt/sources + image grid
       results.forEach((r, i) => {
-        const card = renderResultCard(r, i, allOutputs);
-        resultsBox.appendChild(card);
+        const tcard = renderResultCard(r, i);
+        if (r.status === 'done' && r.result?.dataURLs?.length) {
+          r.result.dataURLs.forEach((d, j) =>
+            allOutputs.push({
+              name: timestampedName(`task${i + 1}-${j + 1}`),
+              dataURL: d, mime: 'image/png',
+            })
+          );
+        }
+        resultsBox.appendChild(tcard);
       });
-      // Save full session in history
+
       await addHistory({
-        id: uid(),
-        kind: 'workflow',
-        createdAt: Date.now(),
-        prompt: state.promptTemplate,
+        id: uid(), kind: 'workflow', createdAt: Date.now(),
+        prompt: state.promptTemplate || '[空模板]',
         model: '',
-        provider: state.provider || loadSettings().preferred.image,
+        provider: state.provider,
         inputs: collectInputs(state),
         outputs: allOutputs,
-        params: { size: state.size, batchMode: state.batchMode, taskCount: tasks.length, n: state.n },
+        params: {
+          quality: state.quality, ratio: state.ratio, size: sizeStr,
+          n: state.n, repeat: state.repeat, taskCount: tasks.length,
+          slots: Object.fromEntries(Object.entries(state.slots).map(([k, v]) =>
+            [k, { mode: v.mode, hasText: !!v.text, imageCount: v.images.length, hasInstruction: !!v.instruction }]
+          )),
+        },
         note: state.note || '',
       });
+
       const okCount = results.filter(r => r.status === 'done').length;
-      toast(`完成 ${okCount}/${results.length} ✅`, okCount === results.length ? 'success' : 'warn', 4000);
+      toast(`完成 ${okCount}/${results.length} ✅`,
+        okCount === results.length ? 'success' : 'warn', 4000);
     } catch (e) {
       toast(e.message, 'error', 5000);
     } finally {
-      runBtn.disabled = false; runBtn.textContent = '▶ 运行';
-      stopBtn.classList.add('hidden');
+      state.isRunning = false;
       state.aborter = null;
+      runBtn.disabled = false;
+      runBtn.textContent = '▶ 运行';
+      stopBtn.classList.add('hidden');
+      stopBtn.disabled = false;
+      stopBtn.textContent = '⏹ 停止';
+      refreshEstimate();
     }
   };
 
-  return wrap;
+  return { el: step.el, render: refreshEstimate };
 }
 
-/* ────────────────────────────────────────────────────────────
- * Task composition: turn state into a flat list of API calls
- * ──────────────────────────────────────────────────────────── */
+/* ──────────────────────────── Task composition ──────────────────────────── */
 
 function composeTasks(state) {
-  const slotValues = {};   // key -> [{kind:'text'|'image'|'off', text?, image?}]
+  // 1) Slot values per slot (cartesian source)
+  const slotValues = {};
   for (const def of SLOTS) {
     const slot = state.slots[def.key];
     if (slot.mode === 'off') {
       slotValues[def.key] = [{ kind: 'off' }];
     } else if (slot.mode === 'text') {
-      slotValues[def.key] = [{ kind: 'text', text: slot.text || '' }];
+      slotValues[def.key] = [{ kind: 'text', text: (slot.text || '').trim() }];
     } else if (slot.mode === 'image') {
-      if (!slot.images.length) {
-        slotValues[def.key] = [{ kind: 'off' }];
-      } else {
-        slotValues[def.key] = [{ kind: 'image', image: slot.images[0].dataURL, name: slot.images[0].name }];
-      }
+      slotValues[def.key] = slot.images.length
+        ? [{ kind: 'image', image: slot.images[0].dataURL, name: slot.images[0].name, idx: 1 }]
+        : [{ kind: 'off' }];
     } else if (slot.mode === 'images') {
-      if (!slot.images.length) {
-        slotValues[def.key] = [{ kind: 'off' }];
-      } else {
-        slotValues[def.key] = slot.images.map(f => ({ kind: 'image', image: f.dataURL, name: f.name }));
-      }
+      slotValues[def.key] = slot.images.length
+        ? slot.images.map((f, i) => ({ kind: 'image', image: f.dataURL, name: f.name, idx: i + 1 }))
+        : [{ kind: 'off' }];
     }
   }
 
-  // Decide which prompt(s) to use
-  const basePrompt = state.promptTemplate || '';
-  let prompts = [basePrompt];
-  if (state.batchMode === 'prompts') {
-    const lines = (state.promptList || '').split('\n').map(s => s.trim()).filter(Boolean);
-    if (!lines.length) throw new Error('已选"不同提示词列表"模式，请在框中输入至少一行');
-    prompts = lines;
-  }
-
-  // Cartesian product across slots
-  const slotKeys = SLOTS.map(s => s.key);
+  // 2) Cartesian product across slots
   let combos = [{}];
-  for (const k of slotKeys) {
+  for (const def of SLOTS) {
     const next = [];
     for (const c of combos) {
-      for (const v of slotValues[k]) {
-        next.push({ ...c, [k]: v });
-      }
+      for (const v of slotValues[def.key]) next.push({ ...c, [def.key]: v });
     }
     combos = next;
   }
 
-  // Apply batch mode
-  let tasks = [];
-  if (state.batchMode === 'combine' || state.batchMode === 'single' || state.batchMode === 'prompts') {
-    // single = pick first combo only (or all combos if user already provides multi-image slots)
-    // combine = use all combos
-    // prompts = use all combos × all prompts
-    const useCombos = state.batchMode === 'single' ? [combos[0]] : combos;
-    for (const p of prompts) {
-      for (const c of useCombos) {
-        tasks.push(buildTask(p, c));
+  // 3) Prompt list (optional, replaces template)
+  const baseTpl = state.promptTemplate || '';
+  const lines = (state.promptList || '').split('\n').map(s => s.trim()).filter(Boolean);
+  const prompts = lines.length ? lines : [baseTpl];
+  // Validation: at least the template OR some slot instruction must be present
+  const anyInstruction = SLOTS.some(s => state.slots[s.key].mode !== 'off' && state.slots[s.key].instruction?.trim());
+  const hasPrompt = prompts.some(p => p && p.trim());
+  if (!hasPrompt && !anyInstruction) {
+    throw new Error('请填写主 Prompt 模板，或在槽位指令里说明');
+  }
+
+  // 4) repeat
+  const repeat = Math.max(1, state.repeat || 1);
+
+  // 5) Build flat task list
+  const tasks = [];
+  for (const tpl of prompts) {
+    for (const combo of combos) {
+      for (let r = 0; r < repeat; r++) {
+        tasks.push(buildTask(tpl, combo, state, r + 1));
       }
     }
-  } else if (state.batchMode === 'repeat') {
-    const c = combos[0];
-    for (let i = 0; i < state.repeatCount; i++) {
-      tasks.push(buildTask(basePrompt, c, { variantIndex: i + 1 }));
-    }
   }
-  if (!tasks.length) throw new Error('没有可执行的任务（检查槽位与 prompt）');
   return tasks;
 }
 
-function buildTask(promptTemplate, combo, extra = {}) {
-  let prompt = promptTemplate;
-  const refs = [];
+function buildTask(promptTemplate, combo, state, variantIndex) {
+  let prompt = promptTemplate || '';
+  const refs = [];      // task reference images, ordered
+  const refKeys = new Set();   // dedupe by dataURL
   const sources = [];
+
+  // 1) substitute {slotKey} placeholders using cartesian-picked value
   for (const def of SLOTS) {
     const v = combo[def.key];
     const ph = `{${def.key}}`;
     if (!v || v.kind === 'off') {
-      prompt = prompt.replace(ph, '');
+      // remove placeholder + any leading punctuation/space that becomes orphaned
+      prompt = prompt.replace(new RegExp(`[，,、\\s]*${escapeRe(ph)}`, 'g'), '');
       continue;
     }
     if (v.kind === 'text') {
-      prompt = prompt.replace(ph, v.text || '');
-      sources.push({ slot: def.key, kind: 'text', text: v.text });
+      prompt = prompt.replaceAll(ph, v.text || '');
+      if (v.text) sources.push({ slot: def.key, kind: 'text', text: v.text });
     } else if (v.kind === 'image') {
-      // 占位符替换为指代提示
-      prompt = prompt.replace(ph, `[参考${def.zh}图]`);
-      refs.push(v.image);
+      prompt = prompt.replaceAll(ph, `[参考${def.zh.replace(/\s/g, '')}图]`);
+      if (!refKeys.has(v.image)) {
+        refs.push(v.image);
+        refKeys.add(v.image);
+      }
       sources.push({ slot: def.key, kind: 'image', name: v.name });
     }
   }
-  // 清理多余空格
-  prompt = prompt.replace(/\s+/g, ' ').trim();
-  return { prompt, referenceImages: refs, sources, extra };
+
+  // 2) Append slot instructions (with @图片N substitution)
+  const instrPieces = [];
+  for (const def of SLOTS) {
+    const slot = state.slots[def.key];
+    if (slot.mode === 'off') continue;
+    let instr = (slot.instruction || '').trim();
+    if (!instr) continue;
+    // Replace @图片N occurrences within this slot's instruction
+    instr = instr.replace(/@图片(\d+)/g, (m, nStr) => {
+      const n = +nStr;
+      const img = slot.images[n - 1];
+      if (!img) return m; // leave as-is if out of range
+      if (!refKeys.has(img.dataURL)) {
+        refs.push(img.dataURL);
+        refKeys.add(img.dataURL);
+        sources.push({ slot: def.key, kind: 'image', name: img.name, ref: `图片${n}` });
+      }
+      return `[第 ${n} 张参考图：${def.zh.replace(/\s/g, '')} ${img.name}]`;
+    });
+    instrPieces.push(instr);
+  }
+
+  // 3) Assemble final prompt
+  prompt = prompt.replace(/\s+/g, ' ').replace(/^[，,、\s]+|[，,、\s]+$/g, '').trim();
+  let finalPrompt = prompt;
+  if (instrPieces.length) {
+    finalPrompt = (finalPrompt ? finalPrompt + ' ' : '') + instrPieces.join(' ');
+  }
+
+  return { prompt: finalPrompt, referenceImages: refs, sources, variantIndex };
 }
 
-/* ────────────────────────────────────────────────────────────
- * Result card: display + traceability
- * ──────────────────────────────────────────────────────────── */
+/* ──────────────────────────── Result rendering ──────────────────────────── */
 
-function renderResultCard(r, idx, allOutputsAcc) {
+function renderResultCard(r, idx) {
   const card = document.createElement('div');
-  card.className = 'border border-slate-200 rounded-lg p-3 mb-3';
+  card.className = 'result-card ' +
+    (r.status === 'error' ? 'error' : (r.status === 'done' ? 'done' : ''));
 
   const head = document.createElement('div');
-  head.className = 'flex items-start justify-between gap-3';
+  head.className = 'flex items-start justify-between gap-3 mb-2';
   head.innerHTML = `
     <div class="text-sm flex-1 min-w-0">
-      <div class="font-medium text-slate-700">#${idx + 1} ${r.status === 'error' ? '<span class="text-red-600 text-xs">失败</span>' : '<span class="text-emerald-600 text-xs">✓</span>'}</div>
-      <div class="text-xs text-slate-500 truncate" title="${esc(r.item.prompt)}">${esc(r.item.prompt.slice(0, 200))}</div>
+      <div class="flex items-center gap-2">
+        <span class="font-medium text-slate-700">#${idx + 1}</span>
+        ${r.status === 'error' ? '<span class="text-red-600 text-xs">失败</span>' :
+          r.status === 'done'  ? '<span class="text-emerald-600 text-xs">✓ 已完成</span>' :
+                                 '<span class="text-slate-400 text-xs">…</span>'}
+        ${r.item.variantIndex && r.item.variantIndex > 1 ? `<span class="text-xs text-slate-400">· 变体 ${r.item.variantIndex}</span>` : ''}
+      </div>
+      <div class="text-xs text-slate-500 mt-1 line-clamp-2" title="${esc(r.item.prompt)}">${esc(r.item.prompt.slice(0, 240))}${r.item.prompt.length > 240 ? '…' : ''}</div>
     </div>
-    <button class="btn-ghost text-xs" data-act="copy-prompt">复制 prompt</button>
+    <button class="btn-ghost text-xs flex-shrink-0" data-act="copy-prompt">复制 prompt</button>
   `;
   head.querySelector('[data-act=copy-prompt]').onclick = () => copyText(r.item.prompt);
   card.appendChild(head);
 
-  // Sources tags (model/outfit/scene)
   if (r.item.sources?.length) {
     const tags = document.createElement('div');
-    tags.className = 'flex flex-wrap gap-1 mt-2';
+    tags.className = 'flex flex-wrap gap-1 mb-2';
     for (const s of r.item.sources) {
       const t = document.createElement('span');
-      t.className = 'text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600';
-      t.textContent = `${slotZh(s.slot)}: ${s.kind === 'text' ? (s.text?.slice(0, 20) || '空') : (s.name || '图')}`;
+      t.className = 'tag ' + s.kind;
+      const refMark = s.ref ? ` (${s.ref})` : '';
+      t.textContent = `${slotZh(s.slot)}: ${s.kind === 'text' ? (s.text?.slice(0, 24) || '空') : (s.name || '图')}${refMark}`;
       tags.appendChild(t);
     }
     card.appendChild(tags);
@@ -560,14 +823,14 @@ function renderResultCard(r, idx, allOutputsAcc) {
 
   if (r.status === 'done' && r.result?.dataURLs?.length) {
     const grid = document.createElement('div');
-    grid.className = 'grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3';
+    grid.className = 'grid grid-cols-2 sm:grid-cols-3 gap-2';
     r.result.dataURLs.forEach((src, i) => {
       const cell = document.createElement('div');
       cell.className = 'img-card bg-white rounded-md border border-slate-200 p-1';
       cell.innerHTML = `
         <img src="${src}" class="w-full rounded cursor-zoom-in" />
         <div class="flex justify-between mt-1 text-xs">
-          <span class="text-slate-400">${r.result.provider || ''}</span>
+          <span class="text-slate-400">${esc(r.result.provider || '')}</span>
           <button class="btn-ghost" data-act="dl">下载</button>
         </div>
       `;
@@ -575,20 +838,41 @@ function renderResultCard(r, idx, allOutputsAcc) {
       cell.querySelector('[data-act=dl]').onclick = () =>
         download(timestampedName(`task${idx + 1}-${i + 1}`), src);
       grid.appendChild(cell);
-      allOutputsAcc.push({ name: timestampedName(`task${idx + 1}-${i + 1}`), dataURL: src, mime: 'image/png' });
     });
     card.appendChild(grid);
   } else if (r.status === 'error') {
-    const e = document.createElement('div');
-    e.className = 'text-red-600 text-xs mt-2 whitespace-pre-wrap';
-    e.textContent = r.error;
-    card.appendChild(e);
+    const err = document.createElement('div');
+    err.className = 'text-red-600 text-xs whitespace-pre-wrap mt-1';
+    err.textContent = r.error;
+    card.appendChild(err);
   }
   return card;
 }
 
+/* ──────────────────────────── Helpers ──────────────────────────── */
+
 function slotZh(key) {
   return SLOTS.find(s => s.key === key)?.zh || key;
+}
+
+function computeSize(qualityId, ratioId) {
+  const q = QUALITIES.find(x => x.id === qualityId) || QUALITIES[0];
+  const r = RATIOS.find(x => x.id === ratioId) || RATIOS[0];
+  let w, h;
+  if (r.w >= r.h) { h = q.shortSide; w = Math.round(q.shortSide * r.w / r.h); }
+  else            { w = q.shortSide; h = Math.round(q.shortSide * r.h / r.w); }
+  // round to multiple of 8 for compatibility
+  w = Math.round(w / 8) * 8;
+  h = Math.round(h / 8) * 8;
+  return { w, h, size: `${w}x${h}` };
+}
+
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function collectInputs(state) {
@@ -596,80 +880,11 @@ function collectInputs(state) {
   for (const def of SLOTS) {
     const slot = state.slots[def.key];
     if ((slot.mode === 'image' || slot.mode === 'images') && slot.images.length) {
-      slot.images.forEach((f, i) => inputs.push({ name: `${def.key}-${i + 1}-${f.name}`, dataURL: f.dataURL }));
+      slot.images.forEach((f, i) =>
+        inputs.push({ name: `${def.key}-${i + 1}-${f.name}`, dataURL: f.dataURL }));
     }
   }
-  state.reverseImages.forEach((f, i) => inputs.push({ name: `ref-${i + 1}-${f.name}`, dataURL: f.dataURL }));
+  state.reverseImages.forEach((f, i) =>
+    inputs.push({ name: `ref-${i + 1}-${f.name}`, dataURL: f.dataURL }));
   return inputs;
-}
-
-function aspectOf(size) {
-  const [w, h] = size.split('x').map(Number);
-  const g = (a, b) => b ? g(b, a % b) : a;
-  const d = g(w, h);
-  return `${w / d}:${h / d}`;
-}
-
-/* ────────────────────────────────────────────────────────────
- * Tiny dropzone helper (slot-aware)
- * ──────────────────────────────────────────────────────────── */
-
-function simpleDropzone({ multiple = false, onChange, initial = [] } = {}) {
-  const id = 'dz-' + Math.random().toString(36).slice(2, 8);
-  const el = document.createElement('div');
-  el.innerHTML = `
-    <label for="${id}" class="dropzone block">
-      <div class="text-slate-500 text-sm" data-role="hint">点击或拖拽图片到此处${multiple ? '（可多张）' : ''}</div>
-      <input id="${id}" type="file" accept="image/*" ${multiple ? 'multiple' : ''} class="hidden" />
-    </label>
-    <div class="grid grid-cols-3 gap-2 mt-2" data-role="thumbs"></div>
-  `;
-  const input = el.querySelector('input');
-  const dz = el.querySelector('label.dropzone');
-  const thumbs = el.querySelector('[data-role=thumbs]');
-  const hint = el.querySelector('[data-role=hint]');
-  let files = [...(initial || [])];
-
-  function render() {
-    thumbs.innerHTML = '';
-    files.forEach((f, i) => {
-      const c = document.createElement('div');
-      c.className = 'relative group';
-      c.innerHTML = `
-        <img src="${f.dataURL}" class="w-full h-20 object-cover rounded border border-slate-200" />
-        <button class="absolute top-0.5 right-0.5 bg-black/60 text-white text-xs rounded px-1 opacity-0 group-hover:opacity-100">×</button>
-      `;
-      c.querySelector('button').onclick = (e) => {
-        e.preventDefault();
-        files.splice(i, 1);
-        render();
-        onChange?.(files);
-      };
-      thumbs.appendChild(c);
-    });
-    hint.textContent = files.length
-      ? `已选 ${files.length} 张${multiple ? '，可继续添加' : '（再次选会替换）'}`
-      : `点击或拖拽图片到此处${multiple ? '（可多张）' : ''}`;
-  }
-
-  async function add(list) {
-    const arr = Array.from(list).filter(f => f.type.startsWith('image/'));
-    if (!arr.length) return;
-    const ones = await Promise.all(arr.map(async f => ({
-      name: f.name,
-      dataURL: await fileToDataURL(f),
-    })));
-    if (multiple) files.push(...ones);
-    else files = [ones[0]];
-    render();
-    onChange?.(files);
-  }
-
-  input.onchange = e => add(e.target.files);
-  dz.ondragover = e => { e.preventDefault(); dz.classList.add('dragover'); };
-  dz.ondragleave = () => dz.classList.remove('dragover');
-  dz.ondrop = e => { e.preventDefault(); dz.classList.remove('dragover'); add(e.dataTransfer.files); };
-
-  render();
-  return { el, getFiles: () => files };
 }

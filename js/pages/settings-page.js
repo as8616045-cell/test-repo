@@ -12,12 +12,11 @@ export async function render(host) {
   const card = document.createElement('div');
   card.className = 'card space-y-6';
 
-
-  // ── Provider blocks: insert BEFORE prefs (visual order: providers → prefs → general → action bar)
-  const insertProvider = (block) => card.insertBefore(block, prefs);
+  // Build provider blocks first (just create, don't append yet) — order them at the top.
+  const providerBlocks = [];
 
   // ── Volcengine
-  insertProvider(providerBlock({
+  providerBlocks.push(providerBlock({
     title: '🔥 火山方舟 (Volcengine)',
     desc: '即梦 4.0 / 豆包视觉 / Seedance —— 国内可直连，推荐为默认。',
     helpUrl: 'https://www.volcengine.com/product/ark',
@@ -32,7 +31,7 @@ export async function render(host) {
   }));
 
   // ── Gemini
-  insertProvider(providerBlock({
+  providerBlocks.push(providerBlock({
     title: '✨ Google Gemini',
     desc: '视觉理解 + Nano Banana 生图（角色一致性强）。需海外网络。',
     helpUrl: 'https://aistudio.google.com/app/apikey',
@@ -46,7 +45,7 @@ export async function render(host) {
   }));
 
   // ── fal.ai
-  insertProvider(providerBlock({
+  providerBlocks.push(providerBlock({
     title: '🚀 fal.ai',
     desc: 'Flux Kontext / Kling 等海量模型聚合。需海外网络。',
     helpUrl: 'https://fal.ai/dashboard/keys',
@@ -60,7 +59,7 @@ export async function render(host) {
   }));
 
   // ── OpenAI / 中转站
-  insertProvider(providerBlock({
+  providerBlocks.push(providerBlock({
     title: '🤖 OpenAI / 中转站',
     desc: '官方 OpenAI（gpt-image-1 / gpt-image-2 / dall-e-3）或任意 OpenAI 兼容中转站（OneAPI / NewAPI / 私有代理）。改 baseURL 即可切换。',
     helpUrl: 'https://platform.openai.com/api-keys',
@@ -74,13 +73,30 @@ export async function render(host) {
     onField: (k, v) => s.openai[k] = v,
   }));
 
+  // ── DeepSeek（国内文本 LLM，仅用于 prompt 改写）
+  providerBlocks.push(providerBlock({
+    title: '🐋 DeepSeek（国内）',
+    desc: '国产文本 LLM，OpenAI 兼容协议。仅用于 prompt 改写润色（不生图）。',
+    helpUrl: 'https://platform.deepseek.com/api_keys',
+    keyValue: s.deepseek.apiKey,
+    onKey: v => s.deepseek.apiKey = v,
+    fields: [
+      { label: 'Base URL', key: 'baseURL', val: s.deepseek.baseURL, hint: '官方：https://api.deepseek.com' },
+      { label: '聊天模型', key: 'chatModel', val: s.deepseek.chatModel, hint: 'deepseek-chat 或 deepseek-reasoner' },
+    ],
+    onField: (k, v) => s.deepseek[k] = v,
+  }));
+
+  // Append all provider blocks first (top of card)
+  providerBlocks.forEach(b => card.appendChild(b));
+
 
   // ── Preferred providers
   const prefs = document.createElement('div');
   prefs.innerHTML = '<h2 class="text-base font-semibold mb-2">默认服务商</h2>';
   const grid = document.createElement('div');
   grid.className = 'grid grid-cols-2 gap-3';
-  for (const cap of ['vision', 'image', 'edit', 'video']) {
+  for (const cap of ['vision', 'chat', 'image', 'edit', 'video']) {
     const wrap = document.createElement('div');
     wrap.innerHTML = `<label class="form-label">${capLabel(cap)}</label>`;
     const sel = document.createElement('select');
@@ -157,6 +173,7 @@ export async function render(host) {
 function capLabel(c) {
   return ({
     vision: '反推提示词（视觉理解）',
+    chat:   'Prompt 改写润色（纯文本）',
     image:  '生图（文/图生图、一致性）',
     edit:   '编辑（换产品 / 换背景）',
     video:  '生视频',
