@@ -231,11 +231,16 @@
 
 /* ─── Generation params controls ─────────────────────────────── */
 
-/* The main prompt textarea is intentionally tall */
+/* The main prompt textarea is intentionally tall, narrower than its parent
+ * frame, and resizable on both axes（用户可以横向拉宽,默认是父容器宽度 - 16px）. */
 textarea.prompt-main {
   min-height: 200px;
   font-size: 14px;
   line-height: 1.6;
+  resize: both;
+  width: calc(100% - 16px);
+  max-width: 100%;
+  display: block;
 }
 
 /* Button group (used for quality 1K/2K/4K, n 1/2/3/4 etc.) */

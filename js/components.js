@@ -60,26 +60,30 @@ export function section(title, contentNode, subtitle) {
 /* ───────────────────────── Endpoint select ───────────────────────── */
 
 /**
- * Endpoint dropdown filtered by capability. v4 替代 providerSelect.
+ * Endpoint dropdown filtered by bucket ('llm' | 'image') or fine-grained
+ * capability ('vision' | 'chat' | 'image' | 'edit' | 'video').
  *
- * 列表来自 endpointsFor(capability) —— 自动过滤掉不支持该能力的协议
- * （比如 fal.ai 协议不会出现在 vision/chat 下拉里）。
+ * 列表来自 endpointsFor() —— 自动过滤掉协议不支持的端点
+ * （比如 fal.ai 协议不会出现在 'llm' 桶下拉里, DeepSeek 不会出现在 'image' 桶里）。
  *
- * 默认选中 = settings.capabilities[capability].endpointId（如果它支持该能力）；
- * 否则选第一个可用端点。
- *
- * 返回的 <select> 上挂了一个 dataset.kiroCap 标记，方便上层在 settings 变化时重渲染。
+ * 默认选中 = settings.capabilities[bucket].endpointId（若适用）；否则第一个。
  */
-export function endpointSelect(capability) {
-  const list = endpointsFor(capability);
+export function endpointSelect(bucketOrCapability) {
+  const list = endpointsFor(bucketOrCapability);
   const s = loadSettings();
-  const cur = s.capabilities?.[capability]?.endpointId;
+  // bucket 直接读 capabilities[bucket],fine-grained 走 settings.capabilities[bucket-of-cap]
+  const isBucket = bucketOrCapability === 'llm' || bucketOrCapability === 'image';
+  const bucket = isBucket
+    ? bucketOrCapability
+    : (['vision', 'chat'].includes(bucketOrCapability) ? 'llm' : 'image');
+  const cur = s.capabilities?.[bucket]?.endpointId;
+
   const sel = document.createElement('select');
   sel.className = 'form-input';
-  sel.dataset.kiroCap = capability;
+  sel.dataset.kiroBucket = bucket;
   if (!list.length) {
     const o = document.createElement('option');
-    o.textContent = '（无可用端点，请先在「设置」添加并填 Key）';
+    o.textContent = '（无可用端点 — 请去「设置」添加 API）';
     o.disabled = true; o.selected = true;
     sel.appendChild(o);
     sel.disabled = true;

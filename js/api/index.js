@@ -1,24 +1,29 @@
-// js/api/index.js — v4 unified API router
+// js/api/index.js — v4 unified API router (2-bucket model: llm + image)
 //
-// 架构：
-//   3 个协议层（protocols/openai.js / gemini.js / fal.js）—— 纯函数，接 endpoint 参数
+// 架构:
+//   3 个协议层（protocols/openai.js / gemini.js / fal.js）—— 纯函数,接 endpoint 参数
 //   端点 + 能力指派从 settings 读
 //   detectProtocol(endpoint) 按 baseURL 自动识别协议（支持手动覆盖）
 //
-// 调用形态：
+// 用户只填 baseURL + apiKey,系统自动识别厂商和协议。
+// 能力简化为 2 个桶:
+//   - llm   桶 -> 处理 vision（反推）+ chat（改写）
+//   - image 桶 -> 处理 image（生图）+ edit（编辑）+ video（视频）
+//
+// 调用形态:
 //   API.reverseImage(images, instr, override?, runOpts?)
 //   API.rewritePrompt(text,           override?, customInstr?, runOpts?)
 //   API.generateImage(opts,           override?, runOpts?)
 //   API.editImage(opts,               override?, runOpts?)
 //   API.generateVideo(opts,           override?, runOpts?)
 //
-// override = undefined         → 用 settings.capabilities[cap]
-// override = { endpointId, model? } → 临时切换端点（model 不传则用默认能力的 model）
+// override = undefined         -> 用 settings.capabilities[bucket]
+// override = { endpointId, model? } -> 临时切换端点（model 不传则用默认能力的 model）
 
 import * as openaiP from './protocols/openai.js';
 import * as geminiP from './protocols/gemini.js';
 import * as falP    from './protocols/fal.js';
-import { loadSettings, getEndpoint } from '../settings.js';
+import { loadSettings, getEndpoint, BUCKETS, CAPABILITY_TO_BUCKET } from '../settings.js';
 
 const PROTOCOLS = {
   openai: openaiP,
@@ -36,7 +41,7 @@ export function detectProtocol(endpoint) {
   const url = (endpoint.baseURL || '').toLowerCase();
   if (/generativelanguage\.googleapis\.com/.test(url)) return 'gemini';
   if (/queue\.fal\.run|fal\.ai|fal\.run/.test(url)) return 'fal';
-  return 'openai'; // 默认 OpenAI 兼容（OpenAI官方 / DeepSeek / SiliconFlow / 火山方舟 / OneAPI / NewAPI / 任意中转站）
+  return 'openai'; // 默认 OpenAI 兼容
 }
 
 export function getProtocol(endpoint) {
@@ -45,17 +50,24 @@ export function getProtocol(endpoint) {
 
 /* ───────────────── capability resolver ───────────────── */
 
+export function bucketFor(capability) {
+  return CAPABILITY_TO_BUCKET[capability] || 'llm';
+}
+
 function resolve(capability, override) {
+  const bucket = bucketFor(capability);
   const s = loadSettings();
-  const cap = s.capabilities?.[capability];
-  if (!cap) throw new Error(`未知能力 "${capability}"`);
+  const cap = s.capabilities?.[bucket] || { endpointId: '', model: '' };
 
   const endpointId = override?.endpointId || cap.endpointId;
   const model = override?.model || cap.model;
 
+  if (!endpointId) {
+    throw new Error(`「${bucketLabel(bucket)}」还没指派端点。请到设置页添加一个 API,然后在「能力指派」里选定它。`);
+  }
   const endpoint = s.endpoints.find(e => e.id === endpointId);
   if (!endpoint) {
-    throw new Error(`未找到端点 "${endpointId}"。请到「设置」检查能力指派`);
+    throw new Error(`未找到端点「${endpointId}」。请到设置页检查能力指派。`);
   }
   if (!endpoint.apiKey) {
     throw new Error(`端点「${endpoint.name}」还没填 API Key`);
@@ -68,50 +80,54 @@ function resolve(capability, override) {
     throw new Error(`端点「${endpoint.name}」（${proto.meta.name}）不支持「${capability}」能力`);
   }
   if (!model) {
-    throw new Error(`能力「${capability}」未指定模型，请到「设置」填写`);
+    throw new Error(`「${bucketLabel(bucket)}」桶未填模型,请到设置页填写`);
   }
   return { endpoint, model, proto };
 }
 
+function bucketLabel(bucket) {
+  return ({ llm: '💬 LLM', image: '🖼️ 图片' })[bucket] || bucket;
+}
+
 /* ───────────────── public API ───────────────── */
 
-/** 反推提示词（vision） */
+/** 反推提示词（vision -> llm 桶） */
 export async function reverseImage(imageDataURLs, instruction, override, runOpts = {}) {
   const { endpoint, model, proto } = resolve('vision', override);
   const text = await proto.reverseImage(endpoint, model, imageDataURLs, instruction, runOpts);
   return { provider: endpoint.name, text };
 }
 
-/** 改写润色（chat） */
+/** 改写润色（chat -> llm 桶） */
 export async function rewritePrompt(originalPrompt, override, customInstruction, runOpts = {}) {
   const { endpoint, model, proto } = resolve('chat', override);
   const instruction = customInstruction || [
     '你是一名 AI 生图 prompt 工程师。',
-    '请把下面这段 prompt 改写得更具体、更有画面感（增加镜头、光线、材质、构图等细节），',
-    '保留原意不要扩张主题。输出英文 prompt（逗号分隔的关键词形式），不要解释、不要前后缀。',
+    '请把下面这段 prompt 改写得更具体、更有画面感（增加镜头、光线、材质、构图等细节）,',
+    '保留原意不要扩张主题。输出英文 prompt（逗号分隔的关键词形式）,不要解释、不要前后缀。',
     '',
-    '原 prompt：',
+    '原 prompt:',
     originalPrompt,
   ].join('\n');
   const text = await proto.chatText(endpoint, model, instruction, runOpts);
   return { provider: endpoint.name, text };
 }
 
-/** 生图 */
+/** 生图（image -> 图片桶） */
 export async function generateImage(opts, override, runOpts = {}) {
   const { endpoint, model, proto } = resolve('image', override);
   const r = await proto.generateImage(endpoint, model, opts, runOpts);
   return { provider: endpoint.name, ...r };
 }
 
-/** 图像编辑 */
+/** 图像编辑（edit -> 图片桶） */
 export async function editImage(opts, override, runOpts = {}) {
   const { endpoint, model, proto } = resolve('edit', override);
   const r = await proto.editImage(endpoint, model, opts, runOpts);
   return { provider: endpoint.name, ...r };
 }
 
-/** 视频生成 */
+/** 视频生成（video -> 图片桶,复用同一端点） */
 export async function generateVideo(opts, override, runOpts = {}) {
   const { endpoint, model, proto } = resolve('video', override);
   const r = await proto.generateVideo(endpoint, model, opts, runOpts);
@@ -120,12 +136,25 @@ export async function generateVideo(opts, override, runOpts = {}) {
 
 /* ───────────────── helpers for UI ───────────────── */
 
-/** 列出支持指定能力的所有端点（用于工作流的 endpointSelect 和设置页能力指派下拉） */
-export function endpointsFor(capability) {
+/**
+ * 列出可用于指定桶的所有端点。
+ *   - 'llm' 桶: 协议必须支持 chat 或 vision 中的至少一个
+ *   - 'image' 桶: 协议必须支持 image / edit / video 中的至少一个
+ *
+ * 也接受 fine-grained capability 名称（'vision'/'chat'/'image'/'edit'/'video'）,
+ * 那时直接按协议是否声明该 capability 过滤。
+ */
+export function endpointsFor(bucketOrCapability) {
   const s = loadSettings();
+  const isBucket = BUCKETS.includes(bucketOrCapability);
+  const wantedCaps = isBucket
+    ? (bucketOrCapability === 'llm' ? ['chat', 'vision'] : ['image', 'edit', 'video'])
+    : [bucketOrCapability];
+
   return s.endpoints.filter(ep => {
     const proto = getProtocol(ep);
-    return proto?.meta?.capabilities?.includes(capability);
+    if (!proto?.meta?.capabilities) return false;
+    return wantedCaps.some(c => proto.meta.capabilities.includes(c));
   });
 }
 

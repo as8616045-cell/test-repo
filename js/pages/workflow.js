@@ -61,9 +61,8 @@ export async function render(host) {
   const state = {
     // generation params
     // override 端点（仅本次会话有效，不写回 settings.capabilities）
-    imageEndpointId:   settings.capabilities.image?.endpointId   || '',
-    chatEndpointId:    settings.capabilities.chat?.endpointId    || '',
-    visionEndpointId:  settings.capabilities.vision?.endpointId  || '',
+    imageEndpointId: settings.capabilities.image?.endpointId || '',
+    llmEndpointId:   settings.capabilities.llm?.endpointId   || '',
     quality: '1k',
     ratio: '1:1',
     n: DEFAULT_N,
@@ -94,8 +93,9 @@ export async function render(host) {
 
   // ─── Step 1: Prompt
   const step1 = stepFrame(1, '主 Prompt', '可用占位符 {model} {outfit} {scene} 引用下方槽位。');
-  step1.body.appendChild(buildPromptSubCard(state, notifyChange));
+  // 反推放在第一行（让用户先用图反推出 prompt,再编辑模板）
   step1.body.appendChild(buildReverseSubCard(state, notifyChange));
+  step1.body.appendChild(buildPromptSubCard(state, notifyChange));
   step1.body.appendChild(buildPromptListSubCard(state, notifyChange));
   host.appendChild(step1.el);
 
@@ -137,10 +137,10 @@ function buildPromptSubCard(state, onChange) {
   // Rewrite row: button + endpoint selector + status
   const actions = document.createElement('div');
   actions.className = 'flex flex-wrap gap-2 items-center mt-3';
-  const provSel = endpointSelect('chat');
+  const provSel = endpointSelect('llm');
   provSel.style.maxWidth = '260px';
-  if (state.chatEndpointId) provSel.value = state.chatEndpointId;
-  provSel.onchange = () => state.chatEndpointId = provSel.value;
+  if (state.llmEndpointId) provSel.value = state.llmEndpointId;
+  provSel.onchange = () => state.llmEndpointId = provSel.value;
   actions.innerHTML = `
     <button class="btn-primary" data-act="rewrite">✨ LLM 改写润色</button>
     <span class="text-xs text-slate-500">用：</span>
@@ -163,7 +163,7 @@ function buildPromptSubCard(state, onChange) {
     hint.textContent = '';
     try {
       state.lastPromptBeforeRewrite = ta.value;
-      const { provider, text } = await API.rewritePrompt(ta.value, { endpointId: state.chatEndpointId });
+      const { provider, text } = await API.rewritePrompt(ta.value, { endpointId: state.llmEndpointId });
       ta.value = text;
       state.promptTemplate = text;
       undoBtn.classList.remove('hidden');
@@ -205,10 +205,10 @@ function buildReverseSubCard(state, onChange) {
 
   const row = document.createElement('div');
   row.className = 'flex flex-wrap gap-2 items-center mt-3';
-  const provSel = endpointSelect('vision');
+  const provSel = endpointSelect('llm');
   provSel.style.maxWidth = '260px';
-  if (state.visionEndpointId) provSel.value = state.visionEndpointId;
-  provSel.onchange = () => state.visionEndpointId = provSel.value;
+  if (state.llmEndpointId) provSel.value = state.llmEndpointId;
+  provSel.onchange = () => state.llmEndpointId = provSel.value;
   row.innerHTML = `
     <button class="btn-primary" data-act="run">反推 → 替换</button>
     <button class="btn-ghost" data-act="append">反推 → 追加</button>

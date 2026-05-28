@@ -1,4 +1,4 @@
-// js/settings.js — v4: endpoints + capabilities 数据结构
+// js/settings.js — v4: 自动识别端点 + 2 桶能力指派（LLM / 图片）
 //
 // v4 schema:
 //   {
@@ -7,55 +7,112 @@
 //       ...
 //     ],
 //     capabilities: {
-//       vision: { endpointId, model },
-//       chat:   { endpointId, model },
-//       image:  { endpointId, model },
-//       edit:   { endpointId, model },
-//       video:  { endpointId, model },
+//       llm:   { endpointId, model },   // 文字 + 多模态：覆盖反推（vision）和改写（chat）
+//       image: { endpointId, model },   // 生图 + 编辑（+ 视频，复用同一端点）
 //     },
 //     concurrency, corsProxy,
 //   }
 //
-// 自动从 v3 / v2 / v1 迁移已填的 Key。
+// 用户只填 baseURL + apiKey，detectProvider() 按 URL 自动识别厂商和协议。
+// 老 v3 设置走 migrateFromV3 自动转换。
 
 const STORAGE_KEY = 'ai-studio:settings:v4';
 const OLD_KEYS = ['ai-studio:settings:v3', 'ai-studio:settings:v2', 'ai-studio:settings:v1'];
 
-/** 6 个预设端点 —— 首次进入 / 重置时自动塞入 */
+/** 用于"快速粘贴"的预设 baseURL —— 不再作为默认端点塞入,
+ * 而是设置页提供的快捷按钮:点击就帮用户把 baseURL 填进表单. */
 export const PRESET_ENDPOINTS = [
-  { id: 'volcengine',  name: '火山方舟（即梦4.0/豆包视觉/Seedance）',
-    baseURL: 'https://ark.cn-beijing.volces.com/api/v3', apiKey: '', protocol: 'auto' },
-  { id: 'openai',      name: 'OpenAI 官方',
-    baseURL: 'https://api.openai.com', apiKey: '', protocol: 'auto' },
-  { id: 'gemini',      name: 'Google Gemini',
-    baseURL: 'https://generativelanguage.googleapis.com/v1beta', apiKey: '', protocol: 'auto' },
-  { id: 'deepseek',    name: 'DeepSeek（仅文本）',
-    baseURL: 'https://api.deepseek.com', apiKey: '', protocol: 'auto' },
-  { id: 'siliconflow', name: '硅基流动（聚合）',
-    baseURL: 'https://api.siliconflow.cn', apiKey: '', protocol: 'auto' },
-  { id: 'fal',         name: 'fal.ai',
-    baseURL: 'https://queue.fal.run', apiKey: '', protocol: 'auto' },
+  { id: 'volcengine',  name: '火山方舟', icon: '🌋',
+    baseURL: 'https://ark.cn-beijing.volces.com/api/v3', protocol: 'openai',
+    defaultModels: { llm: 'doubao-seed-1-6-vision-250815', image: 'doubao-seedream-4-0-250828' } },
+  { id: 'openai',      name: 'OpenAI 官方', icon: '🤖',
+    baseURL: 'https://api.openai.com', protocol: 'openai',
+    defaultModels: { llm: 'gpt-4o', image: 'gpt-image-1' } },
+  { id: 'gemini',      name: 'Google Gemini', icon: '✨',
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta', protocol: 'gemini',
+    defaultModels: { llm: 'gemini-2.5-flash', image: 'gemini-2.5-flash-image' } },
+  { id: 'deepseek',    name: 'DeepSeek', icon: '🐋',
+    baseURL: 'https://api.deepseek.com', protocol: 'openai',
+    defaultModels: { llm: 'deepseek-chat', image: '' } },
+  { id: 'siliconflow', name: '硅基流动', icon: '🌊',
+    baseURL: 'https://api.siliconflow.cn', protocol: 'openai',
+    defaultModels: { llm: 'Qwen/Qwen2.5-VL-72B-Instruct', image: 'Kwai-Kolors/Kolors' } },
+  { id: 'fal',         name: 'fal.ai', icon: '🎨',
+    baseURL: 'https://queue.fal.run', protocol: 'fal',
+    defaultModels: { llm: '', image: 'fal-ai/flux-pro/kontext' } },
 ];
 
-/** 默认能力指派 —— 都先指到火山方舟（国内可直连） */
-export const DEFAULT_CAPABILITIES = {
-  vision: { endpointId: 'volcengine', model: 'doubao-seed-1-6-vision-250815' },
-  chat:   { endpointId: 'volcengine', model: 'doubao-seed-1-6-vision-250815' },
-  image:  { endpointId: 'volcengine', model: 'doubao-seedream-4-0-250828' },
-  edit:   { endpointId: 'volcengine', model: 'doubao-seedream-4-0-250828' },
-  video:  { endpointId: 'volcengine', model: 'doubao-seedance-1-0-pro-250528' },
+/** 2 个桶 */
+export const BUCKETS = ['llm', 'image'];
+
+export const BUCKET_LABELS = {
+  llm:   '💬 LLM（文字 / 多模态）',
+  image: '🖼️ 图片（生图 / 编辑）',
 };
 
-export const CAPABILITY_LIST = ['vision', 'chat', 'image', 'edit', 'video'];
+/** capability → bucket 映射 */
+export const CAPABILITY_TO_BUCKET = {
+  vision: 'llm',
+  chat:   'llm',
+  image:  'image',
+  edit:   'image',
+  video:  'image',
+};
+
+/** 默认能力指派 —— 空,等用户添加端点后再回填 */
+export const DEFAULT_CAPABILITIES = {
+  llm:   { endpointId: '', model: '' },
+  image: { endpointId: '', model: '' },
+};
 
 export const DEFAULT_SETTINGS = {
-  endpoints: structuredClone(PRESET_ENDPOINTS),
+  endpoints: [],
   capabilities: structuredClone(DEFAULT_CAPABILITIES),
   concurrency: 3,
   corsProxy: '',
 };
 
-/* ───────────────── load / save / cache ───────────────── */
+/* ───────────────── 自动识别 ───────────────── */
+
+/**
+ * 按 baseURL 自动识别厂商,返回 { id, name, icon, protocol, defaultModels }.
+ * 任何无法识别的 URL 默认返回 'OpenAI 兼容（中转站/自建）'.
+ */
+export function detectProvider(baseURL) {
+  const url = String(baseURL || '').toLowerCase().trim();
+  if (!url) {
+    return { id: 'unknown', name: '（请输入 baseURL）', icon: '❓', protocol: 'auto', confidence: 'none', defaultModels: {} };
+  }
+  if (/volcengine|ark\.cn|volces/.test(url)) {
+    return { id: 'volcengine', name: '火山方舟', icon: '🌋', protocol: 'openai', confidence: 'high',
+             defaultModels: { llm: 'doubao-seed-1-6-vision-250815', image: 'doubao-seedream-4-0-250828' } };
+  }
+  if (/api\.openai\.com/.test(url)) {
+    return { id: 'openai', name: 'OpenAI 官方', icon: '🤖', protocol: 'openai', confidence: 'high',
+             defaultModels: { llm: 'gpt-4o', image: 'gpt-image-1' } };
+  }
+  if (/generativelanguage\.googleapis|gemini/.test(url)) {
+    return { id: 'gemini', name: 'Google Gemini', icon: '✨', protocol: 'gemini', confidence: 'high',
+             defaultModels: { llm: 'gemini-2.5-flash', image: 'gemini-2.5-flash-image' } };
+  }
+  if (/api\.deepseek\.com|deepseek/.test(url)) {
+    return { id: 'deepseek', name: 'DeepSeek', icon: '🐋', protocol: 'openai', confidence: 'high',
+             defaultModels: { llm: 'deepseek-chat', image: '' } };
+  }
+  if (/siliconflow/.test(url)) {
+    return { id: 'siliconflow', name: '硅基流动', icon: '🌊', protocol: 'openai', confidence: 'high',
+             defaultModels: { llm: 'Qwen/Qwen2.5-VL-72B-Instruct', image: 'Kwai-Kolors/Kolors' } };
+  }
+  if (/fal\.run|fal\.ai/.test(url)) {
+    return { id: 'fal', name: 'fal.ai', icon: '🎨', protocol: 'fal', confidence: 'high',
+             defaultModels: { llm: '', image: 'fal-ai/flux-pro/kontext' } };
+  }
+  // 任意 OpenAI 兼容中转站 / OneAPI / NewAPI / 自建代理
+  return { id: 'custom', name: 'OpenAI 兼容（中转站 / 自建）', icon: '🔌', protocol: 'openai', confidence: 'low',
+           defaultModels: { llm: 'gpt-4o', image: 'gpt-image-1' } };
+}
+
+/* ───────────────── load / save ───────────────── */
 
 let _cache = null;
 
@@ -65,24 +122,21 @@ export function loadSettings() {
   const v4raw = localStorage.getItem(STORAGE_KEY);
   if (v4raw) {
     try {
-      const obj = JSON.parse(v4raw);
-      _cache = normalize(obj);
+      _cache = normalize(JSON.parse(v4raw));
       return _cache;
     } catch { /* fall through */ }
   }
-  // 否则尝试从老版本迁移
+  // 否则尝试从 v3 / v2 / v1 迁移
   for (const k of OLD_KEYS) {
     const raw = localStorage.getItem(k);
     if (!raw) continue;
     try {
-      const old = JSON.parse(raw);
-      _cache = migrateFromV3(old);
-      // 立即写回 v4，老 key 保留以防回退
+      _cache = migrateFromV3(JSON.parse(raw));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(_cache));
       return _cache;
     } catch { /* fall through */ }
   }
-  // 全新用户
+  // 全新用户 —— 空端点列表
   _cache = structuredClone(DEFAULT_SETTINGS);
   return _cache;
 }
@@ -92,11 +146,8 @@ export function saveSettings(s) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(_cache));
 }
 
-/** 浅 patch（顶层字段替换；endpoints / capabilities 整块替换） */
 export function updateSettings(patch) {
-  const cur = loadSettings();
-  const next = { ...cur, ...patch };
-  saveSettings(next);
+  saveSettings({ ...loadSettings(), ...patch });
   return loadSettings();
 }
 
@@ -109,7 +160,6 @@ export function importSettings(json) {
   saveSettings(normalize(obj));
 }
 
-/** 清除所有端点的 apiKey（保留端点本身和能力指派） */
 export function clearKeys() {
   const s = loadSettings();
   s.endpoints = s.endpoints.map(ep => ({ ...ep, apiKey: '' }));
@@ -124,13 +174,20 @@ export function getEndpoint(id) {
 
 export function addEndpoint({ name, baseURL, apiKey = '', protocol = 'auto' }) {
   const s = loadSettings();
-  // 生成不冲突的 id
-  let baseId = (name || 'endpoint').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'endpoint';
+  // 用 detectProvider 推一个稳定 id；冲突时加后缀
+  const det = detectProvider(baseURL);
+  let baseId = det.confidence === 'high' ? det.id
+    : (String(name || 'endpoint').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'endpoint');
   let id = baseId;
   let i = 2;
   while (s.endpoints.some(e => e.id === id)) id = `${baseId}-${i++}`;
-  const ep = { id, name: name || baseId, baseURL: (baseURL || '').trim(), apiKey, protocol };
+  const ep = {
+    id,
+    name: name?.trim() || det.name,
+    baseURL: (baseURL || '').trim(),
+    apiKey,
+    protocol: ['auto', 'openai', 'gemini', 'fal'].includes(protocol) ? protocol : 'auto',
+  };
   s.endpoints = [...s.endpoints, ep];
   saveSettings(s);
   return ep;
@@ -139,11 +196,11 @@ export function addEndpoint({ name, baseURL, apiKey = '', protocol = 'auto' }) {
 export function removeEndpoint(id) {
   const s = loadSettings();
   s.endpoints = s.endpoints.filter(e => e.id !== id);
-  // 任何指向该端点的能力 → 回退到第一个端点
-  const fallback = s.endpoints[0]?.id;
-  for (const cap of CAPABILITY_LIST) {
-    if (s.capabilities[cap]?.endpointId === id) {
-      s.capabilities[cap] = { endpointId: fallback || '', model: '' };
+  // 任何指向该端点的 bucket → 回退到第一个端点（或清空）
+  const fallback = s.endpoints[0]?.id || '';
+  for (const b of BUCKETS) {
+    if (s.capabilities[b]?.endpointId === id) {
+      s.capabilities[b] = { endpointId: fallback, model: '' };
     }
   }
   saveSettings(s);
@@ -155,49 +212,34 @@ export function updateEndpoint(id, patch) {
   saveSettings(s);
 }
 
-export function setCapability(cap, endpointId, model) {
+export function setCapability(bucket, endpointId, model) {
+  if (!BUCKETS.includes(bucket)) throw new Error('未知 bucket: ' + bucket);
   const s = loadSettings();
   s.capabilities = {
     ...s.capabilities,
-    [cap]: { endpointId, model: model || '' },
+    [bucket]: { endpointId: endpointId || '', model: model || '' },
   };
   saveSettings(s);
 }
 
-/** 从预设里选一个塞回端点列表（用于"+ 从预设添加"按钮） */
-export function addPresetEndpoint(presetId) {
-  const preset = PRESET_ENDPOINTS.find(p => p.id === presetId);
-  if (!preset) throw new Error('未知预设：' + presetId);
-  const s = loadSettings();
-  if (s.endpoints.some(e => e.id === preset.id)) {
-    throw new Error(`端点 "${preset.name}" 已存在`);
-  }
-  s.endpoints = [...s.endpoints, structuredClone(preset)];
-  saveSettings(s);
-  return preset.id;
-}
-
-/* ───────────────── normalize / migrate ───────────────── */
+/* ───────────────── normalize ───────────────── */
 
 function normalize(s) {
-  const out = {
-    endpoints: Array.isArray(s?.endpoints) ? s.endpoints.map(normEndpoint) : structuredClone(PRESET_ENDPOINTS),
-    capabilities: { ...structuredClone(DEFAULT_CAPABILITIES), ...(s?.capabilities || {}) },
+  const endpoints = Array.isArray(s?.endpoints) ? s.endpoints.map(normEndpoint) : [];
+  const ids = new Set(endpoints.map(e => e.id));
+
+  const caps = { ...structuredClone(DEFAULT_CAPABILITIES) };
+  for (const b of BUCKETS) {
+    const c = s?.capabilities?.[b] || {};
+    const epId = (c.endpointId && ids.has(c.endpointId)) ? c.endpointId : '';
+    caps[b] = { endpointId: epId, model: typeof c.model === 'string' ? c.model : '' };
+  }
+  return {
+    endpoints,
+    capabilities: caps,
     concurrency: typeof s?.concurrency === 'number' ? s.concurrency : 3,
     corsProxy: typeof s?.corsProxy === 'string' ? s.corsProxy : '',
   };
-  // 修复 capabilities：endpointId 必须存在于 endpoints 里，否则降级到第一个
-  const ids = new Set(out.endpoints.map(e => e.id));
-  const fallbackId = out.endpoints[0]?.id || '';
-  for (const cap of CAPABILITY_LIST) {
-    const c = out.capabilities[cap] || {};
-    if (!c.endpointId || !ids.has(c.endpointId)) {
-      out.capabilities[cap] = { endpointId: fallbackId, model: c.model || '' };
-    } else {
-      out.capabilities[cap] = { endpointId: c.endpointId, model: c.model || '' };
-    }
-  }
-  return out;
 }
 
 function normEndpoint(e) {
@@ -210,90 +252,51 @@ function normEndpoint(e) {
   };
 }
 
+/* ───────────────── migration ───────────────── */
+
 /**
- * v3 → v4 迁移规则：
- *   - 6 个旧 provider 字段 → 6 个端点（id 与旧 provider id 完全对应）
- *   - 模型字段 → 写入对应能力的 model
- *   - preferred.{vision/chat/image/edit/video} → capabilities[*].endpointId
- *
- * 旧格式样例：
- *   { volcengine: { apiKey, visionModel, imageModel, videoModel },
- *     gemini: { apiKey, visionModel, imageModel },
- *     fal: { apiKey, fluxKontextModel, klingModel },
- *     openai: { apiKey, baseURL, visionModel, imageModel },
- *     deepseek: { apiKey, baseURL, chatModel },
- *     siliconflow: { apiKey, baseURL, chatModel, visionModel, imageModel },
- *     preferred: { vision, chat, image, edit, video },
- *     concurrency, corsProxy }
+ * v3 → v4 迁移规则:
+ *   - 6 个旧 provider 字段 → 只把"已填 apiKey"的转成端点
+ *   - 模型字段聚合到 2 桶里（取已填值）
+ *   - preferred.{vision/chat/image/edit/video} → llm/image bucket
  */
 export function migrateFromV3(old) {
-  // 起点：preset 端点（保持顺序、id、默认 baseURL）
-  const eps = structuredClone(PRESET_ENDPOINTS);
-  const findEp = id => eps.find(e => e.id === id);
-
-  // 拷 apiKey / baseURL 到对应预设端点
-  const portKey = (id, src) => {
-    const ep = findEp(id);
-    if (!ep || !src) return;
-    if (src.apiKey) ep.apiKey = src.apiKey;
-    if (src.baseURL) ep.baseURL = src.baseURL;
+  const eps = [];
+  const port = (presetId, src) => {
+    if (!src?.apiKey) return;
+    const preset = PRESET_ENDPOINTS.find(p => p.id === presetId);
+    eps.push({
+      id: presetId,
+      name: preset?.name || presetId,
+      baseURL: (src.baseURL && src.baseURL.trim()) || preset?.baseURL || '',
+      apiKey: src.apiKey,
+      protocol: 'auto',
+    });
   };
-  portKey('volcengine',  old?.volcengine);
-  portKey('gemini',      old?.gemini);
-  portKey('fal',         old?.fal);
-  portKey('openai',      old?.openai);
-  portKey('deepseek',    old?.deepseek);
-  portKey('siliconflow', old?.siliconflow);
+  port('volcengine',  old?.volcengine);
+  port('openai',      old?.openai);
+  port('gemini',      old?.gemini);
+  port('deepseek',    old?.deepseek);
+  port('siliconflow', old?.siliconflow);
+  port('fal',         old?.fal);
 
-  // 能力指派
-  const caps = structuredClone(DEFAULT_CAPABILITIES);
+  // capabilities → 2 桶
   const pref = old?.preferred || {};
+  const caps = { llm: { endpointId: '', model: '' }, image: { endpointId: '', model: '' } };
 
-  // model 字段定位规则
-  const modelOf = (epId, capName) => {
-    if (epId === 'volcengine') {
-      const v = old.volcengine || {};
-      if (capName === 'vision' || capName === 'chat') return v.visionModel || caps[capName].model;
-      if (capName === 'image' || capName === 'edit') return v.imageModel || caps[capName].model;
-      if (capName === 'video') return v.videoModel || caps.video.model;
-    }
-    if (epId === 'gemini') {
-      const g = old.gemini || {};
-      if (capName === 'vision' || capName === 'chat') return g.visionModel || 'gemini-2.5-flash';
-      if (capName === 'image' || capName === 'edit') return g.imageModel || 'gemini-2.5-flash-image';
-    }
-    if (epId === 'openai') {
-      const o = old.openai || {};
-      if (capName === 'vision' || capName === 'chat') return o.visionModel || 'gpt-4o';
-      if (capName === 'image' || capName === 'edit') return o.imageModel || 'gpt-image-1';
-    }
-    if (epId === 'deepseek') {
-      const d = old.deepseek || {};
-      if (capName === 'chat') return d.chatModel || 'deepseek-chat';
-    }
-    if (epId === 'siliconflow') {
-      const sf = old.siliconflow || {};
-      if (capName === 'chat') return sf.chatModel || 'deepseek-ai/DeepSeek-V3';
-      if (capName === 'vision') return sf.visionModel || 'Qwen/Qwen2.5-VL-72B-Instruct';
-      if (capName === 'image' || capName === 'edit') return sf.imageModel || 'Kwai-Kolors/Kolors';
-    }
-    if (epId === 'fal') {
-      const f = old.fal || {};
-      if (capName === 'image' || capName === 'edit') return f.fluxKontextModel || 'fal-ai/flux-pro/kontext';
-      if (capName === 'video') return f.klingModel || 'fal-ai/kling-video/v2/master/image-to-video';
-    }
-    return caps[capName].model;
-  };
+  // LLM 桶：优先沿用 preferred.chat，否则 preferred.vision
+  const llmEpId = (pref.chat && eps.find(e => e.id === pref.chat)) ? pref.chat
+                 : (pref.vision && eps.find(e => e.id === pref.vision)) ? pref.vision
+                 : eps[0]?.id || '';
+  caps.llm.endpointId = llmEpId;
+  caps.llm.model = modelOfV3LLM(old, llmEpId);
 
-  for (const cap of CAPABILITY_LIST) {
-    const wanted = pref[cap];
-    if (wanted && findEp(wanted)) {
-      caps[cap] = { endpointId: wanted, model: modelOf(wanted, cap) };
-    } else {
-      // 老用户没指定 → 沿用 default（火山方舟）但 model 也走 modelOf
-      caps[cap] = { endpointId: caps[cap].endpointId, model: modelOf(caps[cap].endpointId, cap) };
-    }
-  }
+  // 图片桶：优先 preferred.image，否则 preferred.edit
+  const imgEpId = (pref.image && eps.find(e => e.id === pref.image)) ? pref.image
+                : (pref.edit && eps.find(e => e.id === pref.edit)) ? pref.edit
+                : eps[0]?.id || '';
+  caps.image.endpointId = imgEpId;
+  caps.image.model = modelOfV3Image(old, imgEpId);
 
   return normalize({
     endpoints: eps,
@@ -301,6 +304,27 @@ export function migrateFromV3(old) {
     concurrency: typeof old?.concurrency === 'number' ? old.concurrency : 3,
     corsProxy: typeof old?.corsProxy === 'string' ? old.corsProxy : '',
   });
+}
+
+function modelOfV3LLM(old, epId) {
+  const fallback = PRESET_ENDPOINTS.find(p => p.id === epId)?.defaultModels?.llm || '';
+  if (!epId) return fallback;
+  if (epId === 'volcengine')  return old.volcengine?.visionModel || fallback;
+  if (epId === 'gemini')      return old.gemini?.visionModel || fallback;
+  if (epId === 'openai')      return old.openai?.visionModel || fallback;
+  if (epId === 'deepseek')    return old.deepseek?.chatModel || fallback;
+  if (epId === 'siliconflow') return old.siliconflow?.visionModel || old.siliconflow?.chatModel || fallback;
+  return fallback;
+}
+function modelOfV3Image(old, epId) {
+  const fallback = PRESET_ENDPOINTS.find(p => p.id === epId)?.defaultModels?.image || '';
+  if (!epId) return fallback;
+  if (epId === 'volcengine')  return old.volcengine?.imageModel || fallback;
+  if (epId === 'gemini')      return old.gemini?.imageModel || fallback;
+  if (epId === 'openai')      return old.openai?.imageModel || fallback;
+  if (epId === 'siliconflow') return old.siliconflow?.imageModel || fallback;
+  if (epId === 'fal')         return old.fal?.fluxKontextModel || fallback;
+  return fallback;
 }
 
 /** 测试期可重置缓存 */
