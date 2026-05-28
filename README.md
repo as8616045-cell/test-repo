@@ -1,79 +1,128 @@
 # ✨ AI 创作工作台 · Personal Studio
 
-一个**纯前端、零依赖、零部署**的个人 AI 创作面板，专为电商/带货级别的图像/视频流水线设计。
+**一个统一的工作流，把"反推 / 文生图 / 图生图 / 一致性 / 换 X / 批量"全部组合在一个页面里。**
 
-## 核心能力
+纯前端、零依赖、零部署。浏览器打开就能用，支持火山方舟、OpenAI（含中转站）、Gemini、fal.ai。
 
-| 模块 | 功能 |
+---
+
+## 🎨 一个工作流，覆盖所有场景
+
+打开应用后，主页面 **🎨 工作流** 由 6 个步骤组成：
+
+```
+① 反推（可选）→ 上传图自动反推 prompt 填到下方
+   ↓
+② 主 Prompt 模板（可用占位符 {model} {outfit} {scene}）
+   [✨ LLM 改写润色] 一键扩写
+   ↓
+③ 三个槽位（每个独立选模式）
+   ┌─模特─┐ ┌─服装/产品─┐ ┌─场景/背景─┐
+   │ 不用  │ │ 不用       │ │ 不用      │
+   │ 文字  │ │ 文字       │ │ 文字      │
+   │ 单图  │ │ 单图       │ │ 单图      │
+   │ 多图  │ │ 多图       │ │ 多图      │
+   └──────┘ └────────────┘ └───────────┘
+   ↓
+④ 服务商 / 模型 / 尺寸 / 每任务出几张
+   ↓
+⑤ 批量模式：单次 / 同 prompt 多变体 / 不同 prompt 列表 / 槽位笛卡尔积
+   ↓
+⑥ ▶ 运行 → 实时进度 → 带溯源信息的结果（每张图都标注用了哪个槽位）
+```
+
+### 🎯 同一套界面，任意组合实现 9 种需求
+
+| 您要做的 | 怎么配 |
 |---|---|
-| 🔍 反推提示词 | 上传图片 → 输出可直接拿去生图的 prompt |
-| 🎭 一致性生图 | 参考图 + prompt → 保持人物/风格/场景一致的成图 |
-| 👗 固定模特换产品 | 1 张模特图 + N 张产品图 → 批量生成"该模特展示这些产品"的图 |
-| 🌆 固定模特+产品换背景 | 1 张主体图 + N 个背景描述 → 批量换背景 |
-| ⚡ 批量任务 | CSV / 多行文本喂入，几十上百条 prompt 一次跑完 |
-| 📚 历史记录 | 所有生成自动存浏览器 IndexedDB，可回看/下载 |
+| **纯文生图** | 三个槽位都"不用" → 写 prompt → 跑 |
+| **图生图（一致性）** | 模特槽 = 单图 → prompt 写"她在..." → 跑 |
+| **多图参考** | 模特槽 = 单图 + 服装槽 = 单图 + 场景槽 = 单图 |
+| **只换模特** | 模特槽 = 多图，其余 = 单图 → 批量模式选"笛卡尔积" |
+| **只换装** | 服装槽 = 多图，其余 = 单图 → 笛卡尔积 |
+| **只换场景** | 场景槽 = 多图（或文字列表），其余 = 单图 |
+| **同 prompt 多变体** | 槽位随便配 → 批量模式选"重复 N 次" |
+| **不同 prompt 批量** | 在"不同提示词列表"里粘多行 prompt |
+| **大批量笛卡尔积** | 多个槽位都设多图 → 笛卡尔积自动两两组合 |
 
-## 支持的 API（按需开通其中一家即可）
+举几个具体例子：
+- 1 个模特 × 5 个产品 = **5 张**（产品图轮换展示）
+- 1 个模特 × 5 个产品 × 4 个场景 = **20 张**（全组合）
+- 3 个模特 × 1 个产品 × 1 个场景 = **3 张**（不同人代言同款）
+- 单次模式 + 槽位都填 = **1 张**（精修单图）
 
-| 服务商 | 拿来做什么 | 申请地址 |
+---
+
+## 🔌 支持的 API（按需开通其中一家）
+
+| 服务商 | 拿来做什么 | 入口 |
 |---|---|---|
-| **火山方舟 Volcengine** | 即梦 4.0（生图+编辑+一致性）、豆包视觉（反推）、Seedance（生视频） | https://www.volcengine.com/product/ark |
-| **Google Gemini** | 视觉理解、Nano Banana（gemini-2.5-flash-image，角色一致性极强） | https://aistudio.google.com/app/apikey |
-| **fal.ai** | Flux Kontext（编辑王者）、Kling 视频 等海量模型聚合 | https://fal.ai/dashboard/keys |
+| **火山方舟 Volcengine** | 即梦 4.0（一致性极强）、豆包视觉（反推/改写）、Seedance（视频） | https://www.volcengine.com/product/ark |
+| **OpenAI / 中转站** | gpt-image-1 / gpt-image-2 / dall-e-3 / gpt-4o；**支持任意 OpenAI 兼容中转站**（OneAPI / NewAPI / 私有代理），改 baseURL 即可 | https://platform.openai.com/api-keys |
+| **Google Gemini** | 视觉理解、Nano Banana（角色一致性强） | https://aistudio.google.com/app/apikey |
+| **fal.ai** | Flux Kontext、Kling 视频等 | https://fal.ai/dashboard/keys |
 
-> **国内首选火山方舟**：免备案直连、即梦 4.0 原生支持"角色保持/主体保持/换装/换背景"，最贴合您的需求。
-
----
-
-## 🚀 三种使用方式（任选其一）
-
-### 方式 A：本地双击打开（最简单，零安装）
-
-1. 把仓库下载下来（`Code → Download ZIP` 或 `git clone`）
-2. 解压后 **双击 `index.html`** 在浏览器打开
-3. 进入「设置」填 API Key，开始用
-
-> ⚠️ 因浏览器对 `file://` 协议下的 ES module 有限制，部分浏览器（Chrome）需要简单起一个本地 server。最简单的办法：在仓库目录下执行 `python3 -m http.server 8080`，然后访问 http://localhost:8080
-
-### 方式 B：GitHub Pages 在线访问（推荐，手机也能用）
-
-1. 推送本仓库到 GitHub（已在您账号下）
-2. 仓库 → **Settings → Pages → Source 选 `main` / `(root)` → Save**
-3. 等 1 分钟，得到您的专属网址：`https://<你的用户名>.github.io/test-repo/`
-4. 收藏到手机/电脑书签即可。**所有 API Key 仍只存在您本机浏览器**
-
-### 方式 C：Cloudflare Pages（同样免费，速度更快）
-
-1. 登录 https://dash.cloudflare.com → Pages → Create → 连接 GitHub 仓库
-2. Build command 留空、Output directory 填 `/`
-3. Deploy 后得到 `xxx.pages.dev` 域名
+> **国内首选火山方舟**：免备案直连、即梦 4.0 原生支持"角色保持/主体保持/换装/换背景"。
+> **想用 GPT-Image 但没 OpenAI 账号**：在 OneAPI / NewAPI 等中转站买个 Key，把"Base URL"改成中转站域名即可。
 
 ---
 
-## 🔑 API Key 怎么填
+## 🚀 部署方式（任选一种）
 
-打开应用 → 左侧 **⚙️ 设置** → 在对应服务商粘贴 Key → **保存**
+### 方式 A：GitHub Pages（已经在用）
+仓库 → Settings → Pages → Source 选 `Deploy from a branch` → Branch `main` → Save
 
-> Key 只存您浏览器的 `localStorage`，**永远不会上传任何服务器**（您可以打开浏览器开发者工具 → Network 自己验证）。
+→ `https://as8616045-cell.github.io/test-repo/`
+
+### 方式 B：Cloudflare Pages（更快）
+dash.cloudflare.com → Workers & Pages → Create → Connect 仓库 → Build 留空 → Output `/` → Deploy
+
+### 方式 C：本地
+```bash
+git clone https://github.com/as8616045-cell/test-repo
+cd test-repo
+python3 -m http.server 8080
+```
+浏览器开 http://localhost:8080
 
 ---
 
-## 🌐 关于 CORS（境外 API 浏览器调不通时）
+## 🔑 第一次使用
 
-**火山方舟（国内）默认开放 CORS，浏览器可直连，无需任何代理**。
+1. 打开应用 → 左侧 **⚙️ 设置 / API Key**
+2. 至少配一家服务商（推荐火山方舟，国内直连最稳）
+3. 火山方舟控制台还要去**「模型推理 → 在线推理」**逐个开通：
+   - `doubao-seedream-4-0-250828`（即梦 4.0）
+   - `doubao-seed-1-6-vision-250815`（豆包视觉）
+   - `doubao-seedance-1-0-pro-250528`（Seedance Pro）
+4. **保存** → 切到 🎨 工作流 → 开干
 
-Gemini / fal.ai 在浏览器调用时，**通常**也是允许 CORS 的，但偶尔出现 `CORS error` 时，您可以：
+---
 
-### 方案 1：自部署一个 Cloudflare Worker（5 分钟，永久免费）
+## 🌐 OpenAI 中转站怎么接
 
-1. 登录 https://dash.cloudflare.com → Workers & Pages → Create
-2. 把下面的代码贴进去：
+很多用户没法直接访问 OpenAI 官方，但可以通过**第三方中转站**用 GPT-Image 等模型。这个工具原生支持任何**OpenAI 兼容**的中转站：
+
+1. 在中转站（OneAPI / NewAPI / 自部署 / 商用）买 Key
+2. 应用内：⚙️ 设置 → 🤖 OpenAI / 中转站 板块
+3. **Base URL** 改成中转站域名（例如 `https://your-proxy.com`，不要带 `/v1` 后缀）
+4. **API Key** 填中转站给的
+5. **生图模型** 填中转站支持的型号（如 `gpt-image-1` / `gpt-image-2` / `dall-e-3`）
+6. **视觉/聊天模型** 填如 `gpt-4o` / `gpt-4o-mini`
+7. 保存 → 工作流页面在"服务商"下拉里选 `OpenAI / 中转站`
+
+---
+
+## 🛡️ CORS（境外 API 浏览器调不通时）
+
+火山方舟原生支持 CORS，浏览器直连无需代理。
+其他 API（OpenAI 直连、Gemini、fal.ai）大多也允许 CORS，**少数中转站可能不支持**。如出现 `CORS error`，5 分钟自部署一个 Cloudflare Worker：
 
 ```js
 export default {
   async fetch(req) {
     const url = new URL(req.url);
-    const target = url.pathname.slice(1) + url.search; // 去掉前导 /
+    const target = url.pathname.slice(1) + url.search;
     if (!target.startsWith('http')) return new Response('proxy ok', { status: 200 });
     const upstream = await fetch(target, {
       method: req.method,
@@ -89,30 +138,7 @@ export default {
 }
 ```
 
-3. 部署后得到 `https://your-worker.workers.dev`
-4. 在「设置 → 通用 → CORS 代理」填入这个地址，保存即可
-
-> 实现原理：把 `https://api.example.com/foo` 访问改写为 `https://your-worker.workers.dev/https://api.example.com/foo`，由 Worker 中转并加上 CORS 头。
-
----
-
-## 🧠 推荐工作流（针对您的场景）
-
-```
-1) 拿到一张爆款图（竞品/灵感图）
-   → 用「反推提示词」拿到 prompt
-
-2) 微调 prompt 后 → 「一致性生图」生成自己的版本
-   （把模特/产品参考图一起喂进去，保持一致）
-
-3) 「固定模特换产品」批量生成全产品系列图
-   （上传 1 个模特 + N 个产品 → 一次出 N 张）
-
-4) 「固定模特+产品换背景」生成不同场景版
-   （列出"摄影棚 / 海边 / 街头 / 森林"等 → 一次出 N 张）
-
-5) 用历史记录回看任意一张图，二次微调
-```
+部署后把 `https://your-worker.workers.dev` 填到 ⚙️ 设置 → 通用 → CORS 代理。
 
 ---
 
@@ -120,34 +146,33 @@ export default {
 
 ```
 test-repo/
-├── index.html              # 单页入口
-├── assets/styles.css       # 自定义样式（其余用 Tailwind CDN）
+├── index.html              # 单页入口（侧边栏：工作流 / 历史 / 设置）
+├── assets/styles.css
 ├── js/
-│   ├── app.js              # 主控：Tab 路由
+│   ├── app.js              # Tab 路由
 │   ├── settings.js         # API Key / 偏好（localStorage）
 │   ├── storage.js          # 历史记录（IndexedDB）
 │   ├── batch.js            # 并发任务队列
-│   ├── components.js       # 复用 UI（dropzone / gallery / modal）
+│   ├── components.js       # 复用 UI 组件
 │   ├── utils.js            # 工具函数
 │   ├── api/
-│   │   ├── index.js        # 统一接口（reverseImage / generateImage / editImage / generateVideo）
+│   │   ├── index.js        # 统一接口
 │   │   ├── volcengine.js   # 火山方舟
+│   │   ├── openai.js       # OpenAI / 任意中转站
 │   │   ├── gemini.js       # Gemini / Nano Banana
 │   │   └── fal.js          # fal.ai
-│   └── pages/              # 各功能页（路由由 app.js 加载）
-│       ├── reverse.js
-│       ├── consistent.js
-│       ├── change-product.js
-│       ├── change-bg.js
-│       ├── batch-page.js
-│       ├── history.js
-│       └── settings-page.js
+│   └── pages/
+│       ├── workflow.js     # 🎨 主工作流（核心）
+│       ├── history.js      # 📚 历史记录
+│       └── settings-page.js# ⚙️ 设置
 └── README.md
 ```
 
-## ➕ 想加新的 API（比如 Replicate / Runway / Stability / 阿里 通义万相）
+## ➕ 加新 API（比如阿里通义万相 / Replicate / Runway）
 
-复制 `js/api/fal.js` → 改名 → 改成对应 API 的请求格式 → 在 `js/api/index.js` 的 `PROVIDERS` 注册一下即可。每个 adapter 只要导出 4 个函数：`reverseImage / generateImage / editImage / generateVideo`（不支持的就抛错）。
+复制 `js/api/openai.js` 改成对应 API → 在 `js/api/index.js` 的 `PROVIDERS` 里注册一行 → 在 `js/settings.js` 的 `DEFAULT_SETTINGS` 加配置项 → 在 `js/pages/settings-page.js` 加一个板块。
+
+每个 adapter 只要实现这 4 个函数：`reverseImage / generateImage / editImage / generateVideo`（不支持的就抛错）。
 
 ---
 
@@ -155,10 +180,8 @@ test-repo/
 
 - API Key、历史记录、所有数据都只存在您浏览器本地（localStorage + IndexedDB）
 - 应用本身不连任何"我们的服务器"，只直连您配置的 AI 服务商
-- 关闭浏览器/换电脑数据不会跨设备同步（这是特性，不是 bug）；想备份就用「设置 → 导出 JSON」
-
----
+- 想备份就用「⚙️ 设置 → 导出 JSON」
 
 ## License
 
-MIT — 想怎么改怎么改。
+MIT

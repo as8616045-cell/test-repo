@@ -5,6 +5,7 @@ import { listHistory, removeHistory, clearHistory } from '../storage.js';
 import { toast, esc, copyText, download } from '../utils.js';
 
 const KIND_LABEL = {
+  workflow: '工作流',
   reverse: '反推', consistent: '生图', 'change-product': '换产品',
   'change-bg': '换背景', video: '视频',
 };
@@ -19,6 +20,7 @@ export async function render(host) {
   filterRow.innerHTML = `
     <select id="kind" class="form-input max-w-xs">
       <option value="">全部类型</option>
+      <option value="workflow">工作流</option>
       <option value="reverse">反推</option>
       <option value="consistent">生图</option>
       <option value="change-product">换产品</option>
