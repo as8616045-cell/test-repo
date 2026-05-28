@@ -51,7 +51,7 @@ const RATIOS = [
   { id: '21:9', w: 21, h: 9,  orient: 'landscape', note: '横屏 · 超宽' },
 ];
 
-const N_CHOICES = [1, 2, 3, 4];
+const N_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8];
 const DEFAULT_N = 4;
 
 /* ──────────────────────────── Page entry ──────────────────────────── */
@@ -270,11 +270,15 @@ function buildSlotSubCard(state, def, onChange) {
   const slot = state.slots[def.key];
   const card = subCard(`${def.emoji} ${def.zh}`, { badge: `{${def.key}}` });
 
-  // Mode toggle
+  // Mode toggle — 默认即"不使用"（state.mode='off'），用户点击三个按钮中的一个来启用，
+  // 再次点击当前选中按钮即取消（回到不使用）。
   const modeRow = document.createElement('div');
-  modeRow.className = 'flex flex-wrap gap-2 mb-3';
+  modeRow.className = 'flex flex-wrap items-center gap-2 mb-3';
+  const modeHint = document.createElement('span');
+  modeHint.className = 'text-xs text-slate-400 mr-1';
+  modeHint.textContent = '使用方式：';
+  modeRow.appendChild(modeHint);
   const modes = [
-    { id: 'off',    label: '不使用' },
     { id: 'text',   label: '文字' },
     { id: 'image',  label: '单图' },
     { id: 'images', label: '多图' },
@@ -286,15 +290,25 @@ function buildSlotSubCard(state, def, onChange) {
     b.textContent = m.label;
     if (m.id === slot.mode) b.classList.add('active');
     b.onclick = () => {
-      slot.mode = m.id;
+      // 再次点击已激活按钮 → 取消（回到 off）
+      const next = (slot.mode === m.id) ? 'off' : m.id;
+      slot.mode = next;
       modeRow.querySelectorAll('.btn-mode').forEach(x =>
-        x.classList.toggle('active', x.dataset.mode === m.id));
+        x.classList.toggle('active', x.dataset.mode === next));
+      updateOffTag();
       renderBody();
       renderInstruction();
       onChange();
     };
     modeRow.appendChild(b);
   }
+  // small "off" status indicator (visible only when not selected)
+  const offTag = document.createElement('span');
+  offTag.className = 'text-xs text-slate-400 ml-auto';
+  offTag.textContent = '未启用 · 不参与生成';
+  modeRow.appendChild(offTag);
+  const updateOffTag = () => offTag.style.display = (slot.mode === 'off') ? '' : 'none';
+  updateOffTag();
   card.body.appendChild(modeRow);
 
   // Instruction textarea (always visible — works for all modes)
@@ -315,7 +329,7 @@ function buildSlotSubCard(state, def, onChange) {
 
   const instr = document.createElement('textarea');
   instr.className = 'form-textarea';
-  instr.rows = 2;
+  instr.rows = 3;
   instr.placeholder = '例：' + def.defaultInstruction;
   instr.value = slot.instruction;
   instr.oninput = () => { slot.instruction = instr.value; onChange(); };
@@ -372,7 +386,7 @@ function buildSlotSubCard(state, def, onChange) {
     if (slot.mode === 'text') {
       const ta = document.createElement('textarea');
       ta.className = 'form-textarea';
-      ta.rows = 2;
+      ta.rows = 3;
       ta.placeholder = def.placeholder;
       ta.value = slot.text;
       ta.oninput = () => { slot.text = ta.value; onChange(); };
@@ -467,29 +481,57 @@ function buildGenerationStep(state) {
   ratioField.appendChild(sizePreview);
   paramsBody.appendChild(ratioField);
 
-  // n (per-task images) button group, default 4
+  // n (per-task images) button group, default 4, plus custom input
   const nField = document.createElement('div');
   nField.className = 'mt-3';
   nField.innerHTML = `<label class="form-label">每个任务出几张</label>`;
+  const nRow = document.createElement('div');
+  nRow.className = 'flex flex-wrap items-center gap-2';
   const nGroup = document.createElement('div');
   nGroup.className = 'btn-group';
   for (const n of N_CHOICES) {
     const b = document.createElement('button');
     b.className = 'btn-mode';
     b.dataset.n = n;
-    b.textContent = `${n} 张`;
+    b.textContent = String(n);
     if (n === state.n) b.classList.add('active');
     b.onclick = () => {
       state.n = n;
       nGroup.querySelectorAll('.btn-mode').forEach(x =>
         x.classList.toggle('active', +x.dataset.n === n));
+      nCustom.value = '';
+      nCustom.classList.remove('active-custom');
     };
     nGroup.appendChild(b);
   }
-  nField.appendChild(nGroup);
+  nRow.appendChild(nGroup);
+
+  // Custom n input
+  const nCustomWrap = document.createElement('label');
+  nCustomWrap.className = 'flex items-center gap-1.5 text-sm text-slate-600 ml-2';
+  nCustomWrap.innerHTML = '<span>自定义：</span>';
+  const nCustom = document.createElement('input');
+  nCustom.type = 'number';
+  nCustom.min = '1';
+  nCustom.max = '50';
+  nCustom.placeholder = '任意数';
+  nCustom.className = 'form-input n-custom';
+  nCustom.style.maxWidth = '90px';
+  nCustom.oninput = () => {
+    const v = +nCustom.value;
+    if (v >= 1 && v <= 50) {
+      state.n = v;
+      nGroup.querySelectorAll('.btn-mode').forEach(x => x.classList.remove('active'));
+      nCustom.classList.add('active-custom');
+    }
+  };
+  nCustomWrap.appendChild(nCustom);
+  nRow.appendChild(nCustomWrap);
+  nField.appendChild(nRow);
+
   const nHint = document.createElement('p');
   nHint.className = 'text-xs text-slate-500 mt-1';
-  nHint.textContent = '注：部分服务商单次最多返回 1 张，超出会自动循环调用。';
+  nHint.textContent = '默认 4 张。1–8 直接点选，更多请填"自定义"。注：部分服务商单次最多返回 1 张，超出会自动循环调用。';
   nField.appendChild(nHint);
   paramsBody.appendChild(nField);
 
