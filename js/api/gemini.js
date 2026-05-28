@@ -30,14 +30,13 @@ function inlinePart(dataURL) {
   return { inline_data: { mime_type: m[1], data: m[2] } };
 }
 
-async function generateContent(model, contents, generationConfig = {}, { signal } = {}) {
+async function generateContent(model, contents, generationConfig = {}) {
   const c = cfg();
   const url = withProxy(`${BASE}/models/${model}:generateContent?key=${encodeURIComponent(c.apiKey)}`);
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents, generationConfig }),
-    signal,
   });
   if (!r.ok) {
     let msg = `Gemini ${r.status}`;
@@ -49,7 +48,7 @@ async function generateContent(model, contents, generationConfig = {}, { signal 
 }
 
 /** 反推提示词 */
-export async function reverseImage(imageDataURLs, instruction, { signal } = {}) {
+export async function reverseImage(imageDataURLs, instruction) {
   const c = cfg();
   const imgs = Array.isArray(imageDataURLs) ? imageDataURLs : [imageDataURLs];
   const parts = [
@@ -58,18 +57,9 @@ export async function reverseImage(imageDataURLs, instruction, { signal } = {}) 
   ];
   const r = await generateContent(c.visionModel, [{ role: 'user', parts }], {
     temperature: 0.4,
-  }, { signal });
+  });
   const out = r.candidates?.[0]?.content?.parts?.find(p => p.text)?.text || '';
   return out.trim();
-}
-
-/** 纯文本 LLM（用于 prompt 改写等） */
-export async function chatText(text, { signal } = {}) {
-  const c = cfg();
-  const r = await generateContent(c.visionModel, [
-    { role: 'user', parts: [{ text }] },
-  ], { temperature: 0.6 }, { signal });
-  return (r.candidates?.[0]?.content?.parts?.find(p => p.text)?.text || '').trim();
 }
 
 function defaultReversePrompt() {
@@ -84,7 +74,7 @@ function defaultReversePrompt() {
  * 文生图 / 参考图生图（Nano Banana - gemini-2.5-flash-image）
  * Nano Banana 支持把多张图作为参考喂入，然后给指令。
  */
-export async function generateImage({ prompt, referenceImages = [] } = {}, { signal } = {}) {
+export async function generateImage({ prompt, referenceImages = [] } = {}) {
   const c = cfg();
   const parts = [
     ...referenceImages.map(inlinePart),
@@ -92,7 +82,7 @@ export async function generateImage({ prompt, referenceImages = [] } = {}, { sig
   ];
   const r = await generateContent(c.imageModel, [{ role: 'user', parts }], {
     responseModalities: ['IMAGE', 'TEXT'],
-  }, { signal });
+  });
   const cand = r.candidates?.[0]?.content?.parts || [];
   const images = [];
   for (const p of cand) {
@@ -109,8 +99,8 @@ export async function generateImage({ prompt, referenceImages = [] } = {}, { sig
 }
 
 /** 图像编辑：复用 generateImage（Nano Banana 同一接口） */
-export async function editImage({ prompt, images = [] } = {}, { signal } = {}) {
-  return generateImage({ prompt, referenceImages: images }, { signal });
+export async function editImage({ prompt, images = [] } = {}) {
+  return generateImage({ prompt, referenceImages: images });
 }
 
 /** Gemini 暂未提供视频生成（Veo 暂未对所有 Key 开放），抛错让上层选其他家 */
@@ -121,5 +111,5 @@ export async function generateVideo() {
 export const meta = {
   name: 'Google Gemini',
   signupUrl: 'https://aistudio.google.com/app/apikey',
-  capabilities: ['vision', 'image', 'edit', 'chat'],
+  capabilities: ['vision', 'image', 'edit'],
 };

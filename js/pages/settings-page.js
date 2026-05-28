@@ -12,11 +12,12 @@ export async function render(host) {
   const card = document.createElement('div');
   card.className = 'card space-y-6';
 
-  // Build provider blocks first (just create, don't append yet) — order them at the top.
-  const providerBlocks = [];
+
+  // ── Provider blocks: insert BEFORE prefs (visual order: providers → prefs → general → action bar)
+  const insertProvider = (block) => card.insertBefore(block, prefs);
 
   // ── Volcengine
-  providerBlocks.push(providerBlock({
+  insertProvider(providerBlock({
     title: '🔥 火山方舟 (Volcengine)',
     desc: '即梦 4.0 / 豆包视觉 / Seedance —— 国内可直连，推荐为默认。',
     helpUrl: 'https://www.volcengine.com/product/ark',
@@ -31,7 +32,7 @@ export async function render(host) {
   }));
 
   // ── Gemini
-  providerBlocks.push(providerBlock({
+  insertProvider(providerBlock({
     title: '✨ Google Gemini',
     desc: '视觉理解 + Nano Banana 生图（角色一致性强）。需海外网络。',
     helpUrl: 'https://aistudio.google.com/app/apikey',
@@ -45,7 +46,7 @@ export async function render(host) {
   }));
 
   // ── fal.ai
-  providerBlocks.push(providerBlock({
+  insertProvider(providerBlock({
     title: '🚀 fal.ai',
     desc: 'Flux Kontext / Kling 等海量模型聚合。需海外网络。',
     helpUrl: 'https://fal.ai/dashboard/keys',
@@ -59,7 +60,7 @@ export async function render(host) {
   }));
 
   // ── OpenAI / 中转站
-  providerBlocks.push(providerBlock({
+  insertProvider(providerBlock({
     title: '🤖 OpenAI / 中转站',
     desc: '官方 OpenAI（gpt-image-1 / gpt-image-2 / dall-e-3）或任意 OpenAI 兼容中转站（OneAPI / NewAPI / 私有代理）。改 baseURL 即可切换。',
     helpUrl: 'https://platform.openai.com/api-keys',
@@ -72,9 +73,6 @@ export async function render(host) {
     ],
     onField: (k, v) => s.openai[k] = v,
   }));
-
-  // Append all provider blocks first (top of card)
-  providerBlocks.forEach(b => card.appendChild(b));
 
 
   // ── Preferred providers

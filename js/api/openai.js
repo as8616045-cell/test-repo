@@ -63,7 +63,7 @@ async function postForm(path, formData, { signal } = {}) {
 }
 
 /** Vision via /v1/chat/completions（OpenAI 兼容） */
-export async function reverseImage(imageDataURLs, instruction, { signal } = {}) {
+export async function reverseImage(imageDataURLs, instruction) {
   const c = cfg();
   const imgs = Array.isArray(imageDataURLs) ? imageDataURLs : [imageDataURLs];
   const content = [
@@ -74,18 +74,7 @@ export async function reverseImage(imageDataURLs, instruction, { signal } = {}) 
     model: c.visionModel,
     messages: [{ role: 'user', content }],
     temperature: 0.4,
-  }, { signal });
-  return r.choices?.[0]?.message?.content?.trim() || '';
-}
-
-/** 纯文本 LLM（用于 prompt 改写等） */
-export async function chatText(text, { signal } = {}) {
-  const c = cfg();
-  const r = await postJSON('/v1/chat/completions', {
-    model: c.visionModel,
-    messages: [{ role: 'user', content: text }],
-    temperature: 0.6,
-  }, { signal });
+  });
   return r.choices?.[0]?.message?.content?.trim() || '';
 }
 
@@ -98,7 +87,7 @@ function defaultReversePrompt() {
 }
 
 /** 文生图 / 图生图（gpt-image-1 / gpt-image-2 / dall-e-3 等） */
-export async function generateImage({ prompt, referenceImages = [], size = '1024x1024', n = 1, quality = 'high' } = {}, { signal } = {}) {
+export async function generateImage({ prompt, referenceImages = [], size = '1024x1024', n = 1, quality = 'high' } = {}) {
   const c = cfg();
   // 有参考图 → /images/edits（multipart） ；无参考图 → /images/generations
   if (referenceImages.length) {
@@ -114,7 +103,7 @@ export async function generateImage({ prompt, referenceImages = [], size = '1024
       const ext = blob.type.split('/')[1] || 'png';
       fd.append('image[]', blob, `ref_${i + 1}.${ext}`);
     }
-    const r = await postForm('/v1/images/edits', fd, { signal });
+    const r = await postForm('/v1/images/edits', fd);
     return parseImagesResp(r);
   } else {
     const body = {
@@ -122,14 +111,14 @@ export async function generateImage({ prompt, referenceImages = [], size = '1024
       prompt, n, size,
     };
     if (quality) body.quality = quality;
-    const r = await postJSON('/v1/images/generations', body, { signal });
+    const r = await postJSON('/v1/images/generations', body);
     return parseImagesResp(r);
   }
 }
 
 /** 图像编辑（同 generateImage 的 edits 路径） */
-export async function editImage({ prompt, images = [], size = '1024x1024', n = 1 } = {}, { signal } = {}) {
-  return generateImage({ prompt, referenceImages: images, size, n }, { signal });
+export async function editImage({ prompt, images = [], size = '1024x1024', n = 1 } = {}) {
+  return generateImage({ prompt, referenceImages: images, size, n });
 }
 
 /** OpenAI 暂不在标准 API 里直接提供视频，抛错让上层路由到其他服务商 */
@@ -163,5 +152,5 @@ function dataURLtoBlob(dataURL) {
 export const meta = {
   name: 'OpenAI / 中转站',
   signupUrl: 'https://platform.openai.com/api-keys',
-  capabilities: ['vision', 'image', 'edit', 'chat'],
+  capabilities: ['vision', 'image', 'edit'],
 };
