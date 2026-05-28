@@ -1,7 +1,7 @@
 // js/api/index.js — unified API router. Picks provider from settings.
 // Each adapter exposes:
 //   reverseImage(imageDataURLs, instruction, { signal })   [requires meta.capabilities.includes('vision')]
-//   chatText(text, { signal })                              [requires meta.capabilities.includes('chat')]
+//   chatText(text, { signal })                              [requires 'chat']
 //   generateImage({ prompt, referenceImages, size, n }, { signal })  [requires 'image']
 //   editImage({ prompt, images, size, n }, { signal })      [requires 'edit']
 //   generateVideo({ prompt, image, ... }, { signal, onProgress })  [requires 'video']
@@ -11,14 +11,16 @@ import * as volcengine from './volcengine.js';
 import * as gemini from './gemini.js';
 import * as fal from './fal.js';
 import * as openai from './openai.js';
+import * as deepseek from './deepseek.js';
 import { loadSettings } from '../settings.js';
 
-export const PROVIDERS = { volcengine, gemini, fal, openai };
+export const PROVIDERS = { volcengine, gemini, fal, openai, deepseek };
 
 export const PROVIDER_LIST = [
   { id: 'volcengine', name: '火山方舟（即梦 4.0 / 豆包视觉 / Seedance）' },
   { id: 'openai',     name: 'OpenAI / 中转站（gpt-image / dall-e）' },
   { id: 'gemini',     name: 'Google Gemini（视觉 + Nano Banana）' },
+  { id: 'deepseek',   name: 'DeepSeek（仅文本改写润色）' },
   { id: 'fal',        name: 'fal.ai（Flux Kontext / Kling 等）' },
 ];
 

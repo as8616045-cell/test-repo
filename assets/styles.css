@@ -226,3 +226,53 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+
+
+/* ─── Generation params controls ─────────────────────────────── */
+
+/* The main prompt textarea is intentionally tall */
+textarea.prompt-main {
+  min-height: 200px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Button group (used for quality 1K/2K/4K, n 1/2/3/4 etc.) */
+.btn-group {
+  display: inline-flex;
+  border: 1px solid rgb(203 213 225);
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+}
+.btn-group .btn-mode {
+  border: 0;
+  border-radius: 0;
+  padding: 6px 14px;
+  background: white;
+  border-right: 1px solid rgb(226 232 240);
+}
+.btn-group .btn-mode:last-child { border-right: 0; }
+.btn-group .btn-mode.active {
+  background: rgb(124 58 237);
+  color: white;
+  border-color: rgb(124 58 237);
+}
+
+/* @图片N reference chip (shown above slot instruction) */
+.chip-ref {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(219 234 254);
+  color: rgb(29 78 216);
+  border: 1px solid rgb(191 219 254);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.chip-ref:hover {
+  background: rgb(147 197 253);
+  color: white;
+}
