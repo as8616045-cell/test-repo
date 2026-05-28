@@ -87,6 +87,22 @@ export async function render(host) {
     onField: (k, v) => s.deepseek[k] = v,
   }));
 
+  // ── 硅基流动 SiliconFlow（国内聚合，chat + vision + image 全能）
+  providerBlocks.push(providerBlock({
+    title: '🌊 硅基流动 SiliconFlow（国内聚合）',
+    desc: 'OpenAI 兼容协议，一个 Key 调用 DeepSeek / Qwen-VL / Kolors / Flux / SD3.5 等众多模型。支持改写、视觉理解、文生图。',
+    helpUrl: 'https://cloud.siliconflow.cn/account/ak',
+    keyValue: s.siliconflow.apiKey,
+    onKey: v => s.siliconflow.apiKey = v,
+    fields: [
+      { label: 'Base URL', key: 'baseURL', val: s.siliconflow.baseURL, hint: '官方：https://api.siliconflow.cn（不含 /v1）' },
+      { label: '聊天模型', key: 'chatModel', val: s.siliconflow.chatModel, hint: '如 deepseek-ai/DeepSeek-V3、Qwen/Qwen2.5-72B-Instruct' },
+      { label: '视觉模型', key: 'visionModel', val: s.siliconflow.visionModel, hint: '如 Qwen/Qwen2.5-VL-72B-Instruct' },
+      { label: '生图模型', key: 'imageModel', val: s.siliconflow.imageModel, hint: '如 Kwai-Kolors/Kolors、stabilityai/stable-diffusion-3-5-large、black-forest-labs/FLUX.1-schnell' },
+    ],
+    onField: (k, v) => s.siliconflow[k] = v,
+  }));
+
   // Append all provider blocks first (top of card)
   providerBlocks.forEach(b => card.appendChild(b));
 

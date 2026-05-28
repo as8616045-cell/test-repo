@@ -41,6 +41,15 @@ export const DEFAULT_SETTINGS = {
     chatModel: 'deepseek-chat',  // 或 deepseek-reasoner
   },
 
+  // 硅基流动 SiliconFlow - 国内 OpenAI 兼容聚合平台（chat + vision + image）
+  siliconflow: {
+    apiKey: '',
+    baseURL: 'https://api.siliconflow.cn',
+    chatModel:   'deepseek-ai/DeepSeek-V3',
+    visionModel: 'Qwen/Qwen2.5-VL-72B-Instruct',
+    imageModel:  'Kwai-Kolors/Kolors',  // 也可换 stabilityai/stable-diffusion-3-5-large 等
+  },
+
   // 默认服务商选择（每个能力可选一家）
   preferred: {
     vision:  'volcengine',
@@ -103,6 +112,7 @@ export function clearKeys() {
   s.fal.apiKey = '';
   s.openai.apiKey = '';
   s.deepseek.apiKey = '';
+  s.siliconflow.apiKey = '';
   saveSettings(s);
 }
 

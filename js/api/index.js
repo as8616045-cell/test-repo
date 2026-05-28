@@ -12,16 +12,18 @@ import * as gemini from './gemini.js';
 import * as fal from './fal.js';
 import * as openai from './openai.js';
 import * as deepseek from './deepseek.js';
+import * as siliconflow from './siliconflow.js';
 import { loadSettings } from '../settings.js';
 
-export const PROVIDERS = { volcengine, gemini, fal, openai, deepseek };
+export const PROVIDERS = { volcengine, gemini, fal, openai, deepseek, siliconflow };
 
 export const PROVIDER_LIST = [
-  { id: 'volcengine', name: '火山方舟（即梦 4.0 / 豆包视觉 / Seedance）' },
-  { id: 'openai',     name: 'OpenAI / 中转站（gpt-image / dall-e）' },
-  { id: 'gemini',     name: 'Google Gemini（视觉 + Nano Banana）' },
-  { id: 'deepseek',   name: 'DeepSeek（仅文本改写润色）' },
-  { id: 'fal',        name: 'fal.ai（Flux Kontext / Kling 等）' },
+  { id: 'volcengine',  name: '火山方舟（即梦 4.0 / 豆包视觉 / Seedance）' },
+  { id: 'siliconflow', name: '硅基流动（DeepSeek / Qwen-VL / Kolors / Flux 等聚合）' },
+  { id: 'openai',      name: 'OpenAI / 中转站（gpt-image / dall-e）' },
+  { id: 'gemini',      name: 'Google Gemini（视觉 + Nano Banana）' },
+  { id: 'deepseek',    name: 'DeepSeek（仅文本改写润色）' },
+  { id: 'fal',         name: 'fal.ai（Flux Kontext / Kling 等）' },
 ];
 
 /** List providers that support a given capability. Used by providerSelect to filter. */
