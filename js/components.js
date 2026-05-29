@@ -198,20 +198,25 @@ export function imageDropzone({
   compact = false,
   onChange,
 } = {}) {
-  const id = 'dz-' + Math.random().toString(36).slice(2, 8);
   const el = document.createElement('div');
+  // 注意：input 不再嵌套在 <label for> 里 —— 那种写法在部分浏览器会触发两次
+  // （文件框秒开秒关，表现为"无法选图"）。改用独立 input + JS 主动 .click()。
   el.innerHTML = `
     ${label ? `<label class="form-label">${esc(label)}</label>` : ''}
-    <label for="${id}" class="dropzone block ${compact ? 'p-3 text-xs' : ''}">
+    <div class="dropzone block ${compact ? 'p-3 text-xs' : ''}" data-role="zone" role="button" tabindex="0">
       <div class="text-slate-500" data-role="hint">点击或拖拽图片到此处${multiple ? '（可多张）' : ''}</div>
-      <input id="${id}" type="file" accept="${accept}" ${multiple ? 'multiple' : ''} class="hidden" />
-    </label>
+    </div>
+    <input type="file" accept="${accept}" ${multiple ? 'multiple' : ''} class="hidden" data-role="file" />
     <div data-role="thumbs" class="grid ${compact ? 'grid-cols-4 sm:grid-cols-5' : 'grid-cols-3 sm:grid-cols-4'} gap-2 mt-2"></div>
   `;
-  const input = el.querySelector('input');
-  const dz = el.querySelector('label.dropzone');
+  const input = el.querySelector('[data-role=file]');
+  const dz = el.querySelector('[data-role=zone]');
   const thumbs = el.querySelector('[data-role=thumbs]');
   const hint = el.querySelector('[data-role=hint]');
+
+  // 点击 / 键盘 Enter 都能打开文件框
+  dz.onclick = () => input.click();
+  dz.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } };
 
   let files = [...(initial || [])];
   const thumbHeight = compact ? 'h-14' : 'h-24';
@@ -251,7 +256,7 @@ export function imageDropzone({
     onChange?.(files);
   }
 
-  input.onchange = e => add(e.target.files);
+  input.onchange = e => { add(e.target.files); input.value = ''; };
   dz.ondragover = e => { e.preventDefault(); dz.classList.add('dragover'); };
   dz.ondragleave = () => dz.classList.remove('dragover');
   dz.ondrop = e => { e.preventDefault(); dz.classList.remove('dragover'); add(e.dataTransfer.files); };

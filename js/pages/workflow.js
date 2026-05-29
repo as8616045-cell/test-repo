@@ -35,9 +35,10 @@ const SLOTS = [
 ];
 
 const QUALITIES = [
-  { id: '1k', label: '1K', shortSide: 1024, hint: '所有服务商支持' },
-  { id: '2k', label: '2K', shortSide: 2048, hint: '部分服务商支持' },
-  { id: '4k', label: '4K', shortSide: 4096, hint: '仅少数服务商支持' },
+  { id: '720p', label: '720P', shortSide: 720,  hint: '高清 · 出图快 · 体积小' },
+  { id: '1k',   label: '1K',   shortSide: 1024, hint: '所有服务商支持' },
+  { id: '2k',   label: '2K',   shortSide: 2048, hint: '部分服务商支持' },
+  { id: '4k',   label: '4K',   shortSide: 4096, hint: '仅少数服务商支持' },
 ];
 
 const RATIOS = [
@@ -65,6 +66,8 @@ export async function render(host) {
     llmEndpointId:   settings.capabilities.llm?.endpointId   || '',
     quality: '1k',
     ratio: '1:1',
+    customW: 1024,
+    customH: 1024,
     n: DEFAULT_N,
     repeat: 1,
     note: '',
@@ -501,12 +504,21 @@ function buildGenerationStep(state) {
   provFieldWrap.appendChild(provSel);
   paramsBody.appendChild(provFieldWrap);
 
-  // Quality (1K / 2K / 4K)
+  // Quality (720P / 1K / 2K / 4K / 自定义)
   const qualityField = document.createElement('div');
   qualityField.className = 'mt-3';
   qualityField.innerHTML = `<label class="form-label">分辨率</label>`;
   const qualityGroup = document.createElement('div');
-  qualityGroup.className = 'btn-group';
+  qualityGroup.className = 'btn-group flex-wrap';
+
+  const syncQualityButtons = () => {
+    qualityGroup.querySelectorAll('.btn-mode').forEach(x =>
+      x.classList.toggle('active', x.dataset.q === state.quality));
+  };
+  const refreshSize = () => {
+    sizePreview.textContent = `→ ${computeSize(state).size}`;
+  };
+
   for (const q of QUALITIES) {
     const b = document.createElement('button');
     b.className = 'btn-mode';
@@ -515,18 +527,52 @@ function buildGenerationStep(state) {
     if (q.id === state.quality) b.classList.add('active');
     b.onclick = () => {
       state.quality = q.id;
-      qualityGroup.querySelectorAll('.btn-mode').forEach(x =>
-        x.classList.toggle('active', x.dataset.q === q.id));
+      syncQualityButtons();
       qualityHint.textContent = q.hint;
-      sizePreview.textContent = `→ ${computeSize(state.quality, state.ratio).size}`;
+      ratioSel.disabled = false;
+      customRow.classList.add('hidden');
+      refreshSize();
     };
     qualityGroup.appendChild(b);
   }
+  // 自定义按钮
+  const customBtn = document.createElement('button');
+  customBtn.className = 'btn-mode';
+  customBtn.dataset.q = 'custom';
+  customBtn.innerHTML = `<b>自定义</b>`;
+  if (state.quality === 'custom') customBtn.classList.add('active');
+  customBtn.onclick = () => {
+    state.quality = 'custom';
+    syncQualityButtons();
+    qualityHint.textContent = '直接指定宽 × 高像素（比例选择此时忽略）';
+    ratioSel.disabled = true;
+    customRow.classList.remove('hidden');
+    refreshSize();
+  };
+  qualityGroup.appendChild(customBtn);
+
   qualityField.appendChild(qualityGroup);
   const qualityHint = document.createElement('p');
   qualityHint.className = 'text-xs text-slate-500 mt-1';
-  qualityHint.textContent = QUALITIES.find(q => q.id === state.quality)?.hint || '';
+  qualityHint.textContent = state.quality === 'custom'
+    ? '直接指定宽 × 高像素（比例选择此时忽略）'
+    : (QUALITIES.find(q => q.id === state.quality)?.hint || '');
   qualityField.appendChild(qualityHint);
+
+  // 自定义宽高输入行（仅 custom 模式显示）
+  const customRow = document.createElement('div');
+  customRow.className = 'flex items-center gap-2 mt-2' + (state.quality === 'custom' ? '' : ' hidden');
+  customRow.innerHTML = `
+    <input type="number" min="64" max="8192" step="8" class="form-input" style="max-width:110px" data-role="cw" value="${state.customW}" />
+    <span class="text-slate-400 text-sm">×</span>
+    <input type="number" min="64" max="8192" step="8" class="form-input" style="max-width:110px" data-role="ch" value="${state.customH}" />
+    <span class="text-xs text-slate-400">像素（64–8192）</span>
+  `;
+  const cwInput = customRow.querySelector('[data-role=cw]');
+  const chInput = customRow.querySelector('[data-role=ch]');
+  cwInput.oninput = () => { state.customW = clamp(parseInt(cwInput.value, 10) || 0, 64, 8192); refreshSize(); };
+  chInput.oninput = () => { state.customH = clamp(parseInt(chInput.value, 10) || 0, 64, 8192); refreshSize(); };
+  qualityField.appendChild(customRow);
   paramsBody.appendChild(qualityField);
 
   // Ratio dropdown with orient labels
@@ -535,6 +581,7 @@ function buildGenerationStep(state) {
   ratioField.innerHTML = `<label class="form-label">比例</label>`;
   const ratioSel = document.createElement('select');
   ratioSel.className = 'form-input';
+  ratioSel.disabled = state.quality === 'custom';
   for (const r of RATIOS) {
     const o = document.createElement('option');
     o.value = r.id;
@@ -544,12 +591,12 @@ function buildGenerationStep(state) {
   }
   ratioSel.onchange = () => {
     state.ratio = ratioSel.value;
-    sizePreview.textContent = `→ ${computeSize(state.quality, state.ratio).size}`;
+    refreshSize();
   };
   ratioField.appendChild(ratioSel);
   const sizePreview = document.createElement('p');
   sizePreview.className = 'text-xs text-slate-500 mt-1 font-mono';
-  sizePreview.textContent = `→ ${computeSize(state.quality, state.ratio).size}`;
+  sizePreview.textContent = `→ ${computeSize(state).size}`;
   ratioField.appendChild(sizePreview);
   paramsBody.appendChild(ratioField);
 
@@ -705,7 +752,7 @@ function buildGenerationStep(state) {
 
     const allOutputs = [];
     try {
-      const sizeStr = computeSize(state.quality, state.ratio).size;
+      const sizeStr = computeSize(state).size;
       const results = await runBatch(tasks, async (task, idx, signal) => {
         const opts = {
           prompt: task.prompt,
@@ -969,9 +1016,15 @@ function slotZh(key) {
   return SLOTS.find(s => s.key === key)?.zh || key;
 }
 
-function computeSize(qualityId, ratioId) {
-  const q = QUALITIES.find(x => x.id === qualityId) || QUALITIES[0];
-  const r = RATIOS.find(x => x.id === ratioId) || RATIOS[0];
+function computeSize(state) {
+  // 自定义分辨率：直接用用户输入的宽高
+  if (state.quality === 'custom') {
+    const w = clamp(parseInt(state.customW, 10) || 1024, 64, 8192);
+    const h = clamp(parseInt(state.customH, 10) || 1024, 64, 8192);
+    return { w, h, size: `${w}x${h}` };
+  }
+  const q = QUALITIES.find(x => x.id === state.quality) || QUALITIES[0];
+  const r = RATIOS.find(x => x.id === state.ratio) || RATIOS[0];
   let w, h;
   if (r.w >= r.h) { h = q.shortSide; w = Math.round(q.shortSide * r.w / r.h); }
   else            { w = q.shortSide; h = Math.round(q.shortSide * r.h / r.w); }
