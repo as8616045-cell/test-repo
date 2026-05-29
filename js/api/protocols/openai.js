@@ -93,11 +93,19 @@ function dataURLtoBlob(dataURL) {
   return new Blob([arr], { type: mime });
 }
 
-function defaultReversePrompt() {
+function defaultReversePrompt(lang = 'zh') {
+  if (lang === 'en') {
+    return [
+      'Analyze this image and produce a single-line English prompt suitable for AI image generation.',
+      'Describe: subject (person/product), appearance, pose, lighting, scene, composition, camera, style.',
+      'Output only comma-separated keywords. No explanation, no quotes.',
+    ].join(' ');
+  }
+  // 中文(默认)
   return [
-    '请仔细分析这张图，输出一段可以直接用于 AI 生图的英文 prompt。',
-    '描述：主体外观/姿态/表情、场景、光线、构图、镜头、风格。',
-    '只输出逗号分隔的关键词，不要解释。',
+    '请仔细观察这张图,输出一段可以直接用于 AI 生图的中文 prompt。',
+    '需要包含:主体(人物/产品)、外观/姿态/表情、场景、光线、构图、镜头、风格。',
+    '只输出用顿号或逗号分隔的关键词短语,不要解释、不要引号、不要前后缀文字。',
   ].join('\n');
 }
 
@@ -117,9 +125,18 @@ function parseImagesResp(r) {
 
 export async function reverseImage(endpoint, model, imageDataURLs, instruction, { signal } = {}) {
   const imgs = Array.isArray(imageDataURLs) ? imageDataURLs : [imageDataURLs];
+  // instruction 可以是字符串(直接用)或 { lang: 'zh'|'en' } 对象(用默认模板)
+  let promptText;
+  if (typeof instruction === 'string' && instruction) {
+    promptText = instruction;
+  } else if (instruction && typeof instruction === 'object' && instruction.lang) {
+    promptText = defaultReversePrompt(instruction.lang);
+  } else {
+    promptText = defaultReversePrompt('zh');
+  }
   const content = [
     ...imgs.map(url => ({ type: 'image_url', image_url: { url } })),
-    { type: 'text', text: instruction || defaultReversePrompt() },
+    { type: 'text', text: promptText },
   ];
   const r = await postJSON(endpoint, '/v1/chat/completions', {
     model,

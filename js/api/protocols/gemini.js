@@ -34,19 +34,34 @@ async function generateContent(endpoint, model, contents, generationConfig = {},
   return r.json();
 }
 
-function defaultReversePrompt() {
+function defaultReversePrompt(lang = 'zh') {
+  if (lang === 'en') {
+    return [
+      'Analyze this image and produce a single-line English prompt suitable for AI image generation.',
+      'Cover: subject (person/product), appearance, pose, lighting, scene, composition, camera, style.',
+      'Output only comma-separated keywords. No explanation, no quotes.',
+    ].join(' ');
+  }
   return [
-    'Analyze this image and produce a single-line English prompt suitable for AI image generation.',
-    'Cover: subject (person/product), appearance, pose, lighting, scene, composition, camera, style.',
-    'Output only comma-separated keywords. No explanation, no quotes.',
-  ].join(' ');
+    '请仔细观察这张图,输出一段可以直接用于 AI 生图的中文 prompt。',
+    '需要包含:主体(人物/产品)、外观/姿态/表情、场景、光线、构图、镜头、风格。',
+    '只输出用顿号或逗号分隔的关键词短语,不要解释、不要引号、不要前后缀文字。',
+  ].join('\n');
 }
 
 export async function reverseImage(endpoint, model, imageDataURLs, instruction, { signal } = {}) {
   const imgs = Array.isArray(imageDataURLs) ? imageDataURLs : [imageDataURLs];
+  let promptText;
+  if (typeof instruction === 'string' && instruction) {
+    promptText = instruction;
+  } else if (instruction && typeof instruction === 'object' && instruction.lang) {
+    promptText = defaultReversePrompt(instruction.lang);
+  } else {
+    promptText = defaultReversePrompt('zh');
+  }
   const parts = [
     ...imgs.map(inlinePart),
-    { text: instruction || defaultReversePrompt() },
+    { text: promptText },
   ];
   const r = await generateContent(endpoint, model, [{ role: 'user', parts }], { temperature: 0.4 }, { signal });
   const out = r.candidates?.[0]?.content?.parts?.find(p => p.text)?.text || '';
