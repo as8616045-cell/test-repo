@@ -79,32 +79,40 @@ export const DEFAULT_SETTINGS = {
  *
  * 用户经常直接从浏览器地址栏复制中转站的"网页后台"地址,比如
  *   https://www.right.codes/home
- *   https://xxx.com/panel  /  /dashboard  /  /#/login
- * 这些路径段是 Web UI,不是 API 根地址。直接往后拼 /v1/models 会得到
- *   https://www.right.codes/home/v1/models  → 404 No static resource
+ *   https://www.right.codes/api-keys
+ *   https://xxx.com/panel  /  /dashboard  /  /#/login  /  /token
+ * 这些路径段都是 Web UI,不是 API 根地址。直接往后拼 /v1/models 会得到
+ *   https://www.right.codes/api-keys/v1/models  → 404 No static resource
  *
- * 这个函数把这些众所周知的"后台页面"路径段剥掉,只保留真正的 API 根。
- * 它非常保守 —— 只剥已知的 UI 路由词,不碰其它自定义路径(有些中转站
- * 确实用 /proxy/openai 这种真实 API 前缀,不能误删)。
+ * 判断逻辑(对 OpenAI 兼容中转站):
+ *   API 根地址要么是裸域名,要么带版本号前缀(/v1、/api/v3、.../llm/v1)。
+ *   所以:
+ *     · 路径里含版本号段(/vN、/vNbeta)→ 视为真实 API 前缀,保留
+ *     · 路径里含 openai 段(如 /proxy/openai)→ 保留
+ *     · 其它任何路径(/home、/api-keys、/panel…)→ 一律砍到域名根
+ *   这样不必穷举后台页面名字,新出现的后台路由也能自动处理。
  */
 export function normalizeBaseURL(url) {
   let u = String(url || '').trim();
   if (!u) return u;
-  // 去掉 hash 路由 (如 https://x.com/#/login)
-  u = u.replace(/#.*$/, '');
-  // 去掉查询串
-  u = u.replace(/\?.*$/, '');
-  // 去掉结尾斜杠
-  u = u.replace(/\/+$/, '');
-  // 反复剥离结尾的"网页后台"路径段 (大小写不敏感)
-  //   只剥非常明确的 Web UI 路由词,避免误删真实 API 前缀(如 /proxy/openai)
-  const UI_SEG = /\/(home|dashboard|panel|console|login|index(?:\.html?)?|tokens?|profile|settings?)$/i;
-  let prev;
-  do {
-    prev = u;
-    u = u.replace(UI_SEG, '').replace(/\/+$/, '');
-  } while (u !== prev);
-  return u;
+  // 去掉 hash 路由 / 查询串 / 结尾斜杠
+  u = u.replace(/#.*$/, '').replace(/\?.*$/, '').replace(/\/+$/, '');
+  if (!u) return u;
+
+  // 拆出 origin(协议+域名) 和 path
+  const m = /^(https?:\/\/[^/]+)(\/.*)?$/i.exec(u);
+  if (!m) return u; // 没带 http(s):// 前缀的非标准输入,原样返回
+  const origin = m[1];
+  const path = (m[2] || '').replace(/\/+$/, '');
+  if (!path) return origin;
+
+  // 真实 API 路径前缀:含版本号段(/vN、/vNbeta)或 openai 段 → 保留完整路径
+  const looksLikeApiPath =
+    /(^|\/)v\d+(beta)?(\/|$)/i.test(path) ||
+    /(^|\/)openai(\/|$)/i.test(path);
+
+  // 否则路径是网页后台路由 → 砍到域名根(OpenAI 兼容中转站的 API 就在根的 /v1)
+  return looksLikeApiPath ? origin + path : origin;
 }
 
 /**
