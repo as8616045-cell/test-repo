@@ -669,3 +669,52 @@ textarea.prompt-box {
 @media (max-width: 768px) {
   .capability-card { grid-template-columns: 1fr; }
 }
+
+
+
+/* ─── Searchable model combobox (settings 能力指派用) ─────────────
+ *
+ * 替代 <datalist> —— 因为 datalist 在 Safari / 移动浏览器表现不稳定,
+ * 数据多时不一定展开。这是一个手写的 input + 下拉面板。
+ */
+.combo-wrap {
+  position: relative;
+}
+.combo-drop {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid rgb(229 231 235);
+  border-radius: 10px;
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, 0.08),
+    0 2px 4px rgba(15, 23, 42, 0.04);
+  z-index: 50;
+  font-size: 12.5px;
+  padding: 4px;
+}
+.combo-drop.hidden { display: none; }
+.combo-item {
+  padding: 7px 10px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: rgb(15 23 42);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background-color 0.1s ease;
+  word-break: break-all;
+}
+.combo-item:hover {
+  background: rgb(245 243 255);
+  color: rgb(91 33 182);
+}
+.combo-msg {
+  padding: 12px;
+  font-size: 12px;
+  color: rgb(148 163 184);
+  text-align: center;
+}

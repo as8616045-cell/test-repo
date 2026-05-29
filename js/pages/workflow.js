@@ -193,8 +193,8 @@ function buildPromptSubCard(state, onChange) {
 }
 
 function buildReverseSubCard(state, onChange) {
-  const card = subCard('反推（可选）', {
-    hint: '上传参考图 → 反推出 prompt → 写入上方模板（替换 / 追加）。',
+  const card = subCard('🔍 反推参考图', {
+    hint: '上传图片 → AI 看图,生成可用于生图的提示词',
     badge: '可选',
   });
   const dz = imageDropzone({
@@ -203,6 +203,27 @@ function buildReverseSubCard(state, onChange) {
   });
   card.body.appendChild(dz.el);
 
+  // 输出语言切换 (默认中文)
+  if (state.reverseLang == null) state.reverseLang = 'zh';
+  const langRow = document.createElement('div');
+  langRow.className = 'flex flex-wrap gap-2 items-center mt-3';
+  langRow.innerHTML = `
+    <span class="text-xs text-slate-500">输出语言:</span>
+    <div class="btn-group" data-role="lang">
+      <button class="btn-mode ${state.reverseLang === 'zh' ? 'active' : ''}" data-lang="zh">中文</button>
+      <button class="btn-mode ${state.reverseLang === 'en' ? 'active' : ''}" data-lang="en">English</button>
+    </div>
+  `;
+  langRow.querySelectorAll('[data-lang]').forEach(b => {
+    b.onclick = () => {
+      state.reverseLang = b.dataset.lang;
+      langRow.querySelectorAll('[data-lang]').forEach(x =>
+        x.classList.toggle('active', x === b));
+    };
+  });
+  card.body.appendChild(langRow);
+
+  // 反推按钮 + 端点选择
   const row = document.createElement('div');
   row.className = 'flex flex-wrap gap-2 items-center mt-3';
   const provSel = endpointPicker('llm', {
@@ -210,25 +231,47 @@ function buildReverseSubCard(state, onChange) {
     onChange: id => state.llmEndpointId = id,
   });
   row.innerHTML = `
-    <button class="btn-primary" data-act="run">反推 → 替换</button>
-    <button class="btn-ghost" data-act="append">反推 → 追加</button>
+    <button class="btn-primary" data-act="run" title="清空主 Prompt 并写入反推结果">
+      ↻ 替换主 Prompt
+    </button>
+    <button class="btn-ghost" data-act="append" title="在主 Prompt 末尾追加反推结果">
+      + 追加到末尾
+    </button>
     <span class="text-xs text-slate-500">用</span>
   `;
   row.appendChild(provSel);
-  const status = document.createElement('span');
-  status.className = 'text-xs text-slate-400';
-  row.appendChild(status);
+  card.body.appendChild(row);
+
+  // 状态行 + 提示
+  const status = document.createElement('div');
+  status.className = 'text-xs text-slate-500 mt-2';
+  card.body.appendChild(status);
+
+  const hint = document.createElement('div');
+  hint.className = 'text-xs text-slate-400 mt-1';
+  hint.innerHTML = `↻ 替换 = 把主 Prompt 内容覆盖为反推结果 · + 追加 = 在主 Prompt 末尾换行加入反推结果。<br/>提示:vision 模型分析一张图通常需要 5–30 秒,请耐心等待。`;
+  card.body.appendChild(hint);
 
   const runBtn = row.querySelector('[data-act=run]');
   const appendBtn = row.querySelector('[data-act=append]');
+
   async function doReverse(append) {
     if (!state.reverseImages.length) return toast('请先上传参考图', 'warn');
+    const t0 = Date.now();
     [runBtn, appendBtn].forEach(b => b.disabled = true);
     runBtn.innerHTML = '<span class="spinner"></span> 分析中…';
-    status.textContent = '';
+    status.innerHTML = `<span class="status-dot warn"></span> 正在请求 vision 模型,通常 5–30 秒…`;
+    // 每 5 秒更新一次进度提示
+    const progress = setInterval(() => {
+      const sec = Math.floor((Date.now() - t0) / 1000);
+      status.innerHTML = `<span class="status-dot warn"></span> 已等待 ${sec}s · 仍在分析…`;
+    }, 1000);
+
     try {
       const { provider, text } = await API.reverseImage(
-        state.reverseImages.map(f => f.dataURL), null, { endpointId: provSel.value },
+        state.reverseImages.map(f => f.dataURL),
+        { lang: state.reverseLang },
+        { endpointId: provSel.value },
       );
       const ta = document.querySelector('textarea.prompt-box');
       if (ta) {
@@ -236,36 +279,60 @@ function buildReverseSubCard(state, onChange) {
         state.promptTemplate = ta.value;
         ta.dispatchEvent(new Event('input'));
       }
-      status.textContent = `由 ${provider} 反推`;
+      const sec = ((Date.now() - t0) / 1000).toFixed(1);
+      status.innerHTML = `<span class="status-dot ok"></span> 由 ${esc(provider)} 反推 · 用时 ${sec}s`;
       toast('已反推 ✅', 'success');
       onChange();
     } catch (e) {
+      status.innerHTML = `<span class="status-dot error"></span> 失败:${esc(e.message || '')}`;
       toast(e.message, 'error', 5000);
-      status.textContent = '失败';
     } finally {
+      clearInterval(progress);
       [runBtn, appendBtn].forEach(b => b.disabled = false);
-      runBtn.textContent = '反推 → 替换';
+      runBtn.innerHTML = '↻ 替换主 Prompt';
     }
   }
   runBtn.onclick = () => doReverse(false);
   appendBtn.onclick = () => doReverse(true);
-  card.body.appendChild(row);
+
   return card.el;
 }
 
 function buildPromptListSubCard(state, onChange) {
-  const card = subCard('提示词列表（可选）', {
-    hint: '每行一个 prompt。如非空，将用列表中的每行替代上方主模板。',
-    badge: '可选',
-  });
+  // 用 details 默认折叠 —— 大多数用户用不上,只有要批量跑多套不同 prompt 的高级用户才打开。
+  const wrap = document.createElement('details');
+  wrap.className = 'sub-card';
+  wrap.style.padding = '0';
+  wrap.innerHTML = `
+    <summary style="cursor:pointer; padding:14px 16px; list-style:none; display:flex; align-items:center; gap:8px;">
+      <span style="font-weight:500; color:rgb(15 23 42);">📋 批量模式:多 Prompt 列表</span>
+      <span class="sub-badge">高级</span>
+      <span style="margin-left:auto; color:rgb(148 163 184); font-size:12px;">展开 ▾</span>
+    </summary>
+    <div style="padding:0 16px 16px 16px;">
+      <div class="text-xs text-slate-500 mb-2 leading-relaxed">
+        <b class="text-slate-700">什么时候用?</b> 你想<b>一次跑很多套不同 prompt</b> 时打开这个。<br/>
+        例如要批量生成 10 套不同主题的图片 → 这里贴 10 行,系统会跑 10 次任务。<br/>
+        <b class="text-slate-700">规则:</b><br/>
+        · 留空 → 用上方主 Prompt(普通模式)<br/>
+        · 写了内容 → <span class="text-amber-700">每行作为一个独立 prompt,上方主 Prompt 模板被覆盖</span><br/>
+        · 占位符 <code class="kbd">{model}</code> <code class="kbd">{outfit}</code> <code class="kbd">{scene}</code> 仍可在每行里使用
+      </div>
+    </div>
+  `;
+  const inner = wrap.querySelector('div[style*="padding"]');
   const ta = document.createElement('textarea');
   ta.className = 'form-textarea prompt-box';
   ta.rows = 8;
-  ta.placeholder = '留空 = 用上方主 prompt\n或：\nwoman in white dress, beach\nwoman in red gown, palace';
+  ta.placeholder = '示例(每行一个 prompt):\nwoman in white dress on the beach\nwoman in red gown in palace\nwoman in black suit at office';
   ta.value = state.promptList;
   ta.oninput = () => { state.promptList = ta.value; onChange(); };
-  card.body.appendChild(ta);
-  return card.el;
+  inner.appendChild(ta);
+
+  // 如果用户已经填了内容,默认展开
+  if (state.promptList && state.promptList.trim()) wrap.open = true;
+
+  return wrap;
 }
 
 /* ──────────────────────────── Step 2: Slots ──────────────────────────── */
