@@ -75,6 +75,39 @@ export const DEFAULT_SETTINGS = {
 /* ───────────────── 自动识别 ───────────────── */
 
 /**
+ * 规范化用户粘贴的 baseURL。
+ *
+ * 用户经常直接从浏览器地址栏复制中转站的"网页后台"地址,比如
+ *   https://www.right.codes/home
+ *   https://xxx.com/panel  /  /dashboard  /  /#/login
+ * 这些路径段是 Web UI,不是 API 根地址。直接往后拼 /v1/models 会得到
+ *   https://www.right.codes/home/v1/models  → 404 No static resource
+ *
+ * 这个函数把这些众所周知的"后台页面"路径段剥掉,只保留真正的 API 根。
+ * 它非常保守 —— 只剥已知的 UI 路由词,不碰其它自定义路径(有些中转站
+ * 确实用 /proxy/openai 这种真实 API 前缀,不能误删)。
+ */
+export function normalizeBaseURL(url) {
+  let u = String(url || '').trim();
+  if (!u) return u;
+  // 去掉 hash 路由 (如 https://x.com/#/login)
+  u = u.replace(/#.*$/, '');
+  // 去掉查询串
+  u = u.replace(/\?.*$/, '');
+  // 去掉结尾斜杠
+  u = u.replace(/\/+$/, '');
+  // 反复剥离结尾的"网页后台"路径段 (大小写不敏感)
+  //   只剥非常明确的 Web UI 路由词,避免误删真实 API 前缀(如 /proxy/openai)
+  const UI_SEG = /\/(home|dashboard|panel|console|login|index(?:\.html?)?|tokens?|profile|settings?)$/i;
+  let prev;
+  do {
+    prev = u;
+    u = u.replace(UI_SEG, '').replace(/\/+$/, '');
+  } while (u !== prev);
+  return u;
+}
+
+/**
  * 按 baseURL 自动识别厂商,返回 { id, name, icon, protocol, defaultModels }.
  * 任何无法识别的 URL 默认返回 'OpenAI 兼容（中转站/自建）'.
  */
@@ -174,8 +207,9 @@ export function getEndpoint(id) {
 
 export function addEndpoint({ name, baseURL, apiKey = '', protocol = 'auto' }) {
   const s = loadSettings();
+  const cleanURL = normalizeBaseURL(baseURL);
   // 用 detectProvider 推一个稳定 id；冲突时加后缀
-  const det = detectProvider(baseURL);
+  const det = detectProvider(cleanURL);
   let baseId = det.confidence === 'high' ? det.id
     : (String(name || 'endpoint').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'endpoint');
   let id = baseId;
@@ -184,7 +218,7 @@ export function addEndpoint({ name, baseURL, apiKey = '', protocol = 'auto' }) {
   const ep = {
     id,
     name: name?.trim() || det.name,
-    baseURL: (baseURL || '').trim(),
+    baseURL: cleanURL,
     apiKey,
     protocol: ['auto', 'openai', 'gemini', 'fal'].includes(protocol) ? protocol : 'auto',
   };
@@ -246,7 +280,8 @@ function normEndpoint(e) {
   return {
     id: String(e.id || '').trim() || 'endpoint',
     name: String(e.name || e.id || 'endpoint'),
-    baseURL: String(e.baseURL || '').trim(),
+    // 加载时也规范化 baseURL —— 这样已经存了错误地址(如 .../home)的端点会自动修好
+    baseURL: normalizeBaseURL(e.baseURL),
     apiKey: String(e.apiKey || ''),
     protocol: ['auto', 'openai', 'gemini', 'fal'].includes(e.protocol) ? e.protocol : 'auto',
   };
