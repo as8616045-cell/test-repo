@@ -54,6 +54,11 @@ export async function render(host) {
         <input class="form-input mono" data-role="baseURL"
                placeholder="https://api.openai.com" autocomplete="off" spellcheck="false" />
         <div class="mt-2 min-h-[20px]" data-role="detect-line"></div>
+        <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+          填的是 <b>API 接口地址</b>,通常是官网域名或 API 文档里给的地址(常以 <code class="kbd">/v1</code> 结尾)。<br/>
+          ⚠️ 不要填你登录中转站网站后看到的<b>网页地址</b>(如 <code class="kbd">.../home</code>、<code class="kbd">.../draw</code>、<code class="kbd">.../api-keys</code>)。<br/>
+          中转站的 API 地址请在其「接口文档 / API 说明」里找,例如 <code class="kbd">https://xxx.com/codex/v1</code>。
+        </p>
       </div>
 
       <div>
