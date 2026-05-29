@@ -15,7 +15,7 @@ import {
   addEndpoint, removeEndpoint,
   setCapability, detectProvider,
 } from '../settings.js';
-import { endpointsFor, pingEndpoint, protocolName } from '../api/index.js';
+import { endpointsFor, pingEndpoint, protocolName, listEndpointModels, pickModelForBucket } from '../api/index.js';
 import { toast, esc, download, readJSONFile } from '../utils.js';
 
 export async function render(host) {
@@ -115,7 +115,7 @@ export async function render(host) {
     renderCapabilityRows();
   }
 
-  addCard.querySelector('[data-act=save]').onclick = () => {
+  addCard.querySelector('[data-act=save]').onclick = async () => {
     let info; try { info = readForm(); } catch (e) { return toast(e.message, 'warn'); }
     const ep = addEndpoint({
       name: info.det.name,
@@ -123,7 +123,7 @@ export async function render(host) {
       apiKey: info.apiKey,
       protocol: 'auto',
     });
-    // 自动指派 — 哪个桶还没指派就指到这个新端点 + 默认模型
+    // 自动指派 — 哪个桶还没指派就指到这个新端点 + 默认模型（先用 detectProvider 的猜测,稍后用真实列表校准）
     s = structuredClone(loadSettings());
     if (!s.capabilities.llm.endpointId && info.det.defaultModels?.llm) {
       setCapability('llm', ep.id, info.det.defaultModels.llm);
@@ -131,13 +131,58 @@ export async function render(host) {
     if (!s.capabilities.image.endpointId && info.det.defaultModels?.image) {
       setCapability('image', ep.id, info.det.defaultModels.image);
     }
+
+    // 关键: 拉真实模型列表,如果当前默认模型不在列表里,智能改选一个真存在的
+    $status.innerHTML = '<span class="text-slate-500"><span class="spinner"></span> 拉取模型列表…</span>';
+    let refineMsg = '';
+    try {
+      const models = await listEndpointModels(ep);
+      if (models.length) {
+        const refined = await refineCapabilityModels(ep, models);
+        if (refined.length) refineMsg = `,自动选: ${refined.join(' / ')}`;
+      }
+    } catch {
+      // 拉不到没关系 — 用户后续可以手动改
+    }
+
+    s = structuredClone(loadSettings());
     $base.value = ''; $key.value = '';
     refreshDetection();
-    $status.innerHTML = `<span class="text-emerald-600">✓ 已添加 ${esc(ep.name)}</span>`;
-    setTimeout(() => $status.innerHTML = '', 3000);
+    $status.innerHTML = `<span class="text-emerald-600">✓ 已添加 ${esc(ep.name)}${esc(refineMsg)}</span>`;
+    setTimeout(() => $status.innerHTML = '', 5000);
     rerender();
     toast(`已添加 ${ep.name}`, 'success');
   };
+
+  /**
+   * 拉到真实模型列表后,校准两个桶的默认模型:
+   * 如果当前 model 在真实列表里 → 不动；否则按桶类型挑一个最合适的。
+   * 返回被改动的桶描述字符串数组(toast 用)。
+   */
+  async function refineCapabilityModels(ep, models) {
+    const ids = new Set(models.map(m => m.id));
+    const current = loadSettings().capabilities;
+    const changes = [];
+
+    for (const bucket of ['llm', 'image']) {
+      if (current[bucket].endpointId !== ep.id) continue;
+      const curModel = current[bucket].model;
+      if (curModel && ids.has(curModel)) continue;       // 当前模型存在,无需改
+      const picked = pickModelForBucket(models, bucket); // 智能挑选
+      if (picked) {
+        setCapability(bucket, ep.id, picked);
+        changes.push(`${bucket === 'llm' ? '💬LLM' : '🖼️图片'}=${picked}`);
+      } else if (bucket === 'llm') {
+        // LLM 桶若没匹配到 vision 模型,用列表里第一个(总比错的好)
+        if (models[0]) {
+          setCapability(bucket, ep.id, models[0].id);
+          changes.push(`💬LLM=${models[0].id}`);
+        }
+      }
+      // image 桶找不到匹配就不动 — 用户必须手动选,免得错乱
+    }
+    return changes;
+  }
 
   addCard.querySelector('[data-act=test]').onclick = async () => {
     let info; try { info = readForm(); } catch (e) { return toast(e.message, 'warn'); }
@@ -255,6 +300,7 @@ export async function render(host) {
     const eps = endpointsFor(bucket);
     const cur = s.capabilities[bucket] || { endpointId: '', model: '' };
     const meta = BUCKET_META[bucket];
+    const datalistId = `models-${bucket}-${Math.random().toString(36).slice(2, 8)}`;
     const wrap = document.createElement('div');
     wrap.className = 'capability-card';
     wrap.innerHTML = `
@@ -270,12 +316,20 @@ export async function render(host) {
         <select class="form-input" data-role="ep"></select>
       </div>
       <div>
-        <label class="form-label">模型</label>
-        <input class="form-input mono" data-role="model" value="${esc(cur.model || '')}" placeholder="${esc(modelPlaceholder(bucket))}" />
+        <label class="form-label flex items-center justify-between">
+          <span>模型</span>
+          <span class="text-[11px] font-normal" data-role="hint"></span>
+        </label>
+        <input class="form-input mono" data-role="model" list="${datalistId}"
+               value="${esc(cur.model || '')}" placeholder="${esc(modelPlaceholder(bucket))}"
+               autocomplete="off" />
+        <datalist id="${datalistId}"></datalist>
       </div>
     `;
     const $ep    = wrap.querySelector('[data-role=ep]');
     const $model = wrap.querySelector('[data-role=model]');
+    const $list  = wrap.querySelector(`#${datalistId}`);
+    const $hint  = wrap.querySelector('[data-role=hint]');
 
     if (!eps.length) {
       const o = document.createElement('option');
@@ -296,6 +350,47 @@ export async function render(host) {
       if (!matched) $ep.value = eps[0].id;
     }
 
+    /**
+     * 异步加载当前 endpoint 的真实模型列表,填进 datalist。
+     * 用户聚焦 input 时浏览器会自动展示这些选项。
+     * 标记当前模型是否在列表里:不在 -> 显示橙色警告。
+     */
+    async function loadModels() {
+      $list.innerHTML = '';
+      $hint.innerHTML = '';
+      const epId = $ep.value;
+      if (!epId) return;
+      const ep = s.endpoints.find(e => e.id === epId);
+      if (!ep) return;
+
+      $hint.innerHTML = '<span class="text-slate-400">⏳ 拉取模型列表...</span>';
+      try {
+        const models = await listEndpointModels(ep);
+        if (!models.length) {
+          $hint.innerHTML = '<span class="text-slate-400">该协议无可列模型,请手填</span>';
+          return;
+        }
+        for (const m of models) {
+          const o = document.createElement('option');
+          o.value = m.id;
+          if (m.name && m.name !== m.id) o.label = m.name;
+          $list.appendChild(o);
+        }
+        // 校验当前 model 是否真存在
+        const ids = new Set(models.map(m => m.id));
+        const curVal = $model.value.trim();
+        if (curVal && !ids.has(curVal)) {
+          $hint.innerHTML = `<span class="text-amber-600">⚠ "${esc(curVal)}" 不在该端点的可用列表里</span>`;
+        } else if (curVal && ids.has(curVal)) {
+          $hint.innerHTML = `<span class="text-emerald-600">✓ ${models.length} 个可用模型</span>`;
+        } else {
+          $hint.innerHTML = `<span class="text-slate-400">${models.length} 个可用模型 (点输入框看)</span>`;
+        }
+      } catch (e) {
+        $hint.innerHTML = `<span class="text-slate-400">无法拉取模型列表 (${esc(e.message?.slice(0, 30) || '')})</span>`;
+      }
+    }
+
     function commit() {
       const epId = $ep.value;
       let model = $model.value.trim();
@@ -307,9 +402,14 @@ export async function render(host) {
       }
       setCapability(bucket, epId, model);
       s = structuredClone(loadSettings());
+      // 重新校验 hint
+      loadModels();
     }
     $ep.onchange    = () => { $model.value = ''; commit(); };
     $model.onchange = commit;
+
+    // 初始加载真实模型列表(异步,不阻塞 UI)
+    loadModels();
 
     return wrap;
   }

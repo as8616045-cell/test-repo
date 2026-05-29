@@ -112,6 +112,12 @@ export async function chatText() {
   throw new Error('fal.ai 协议不支持纯文本 LLM，请改用 OpenAI 兼容或 Gemini 端点');
 }
 
+// fal.ai 没有公开的"模型列表" API,模型路径是用户从 fal 文档里复制粘贴的。
+// 返回空数组,UI 层会回退到自由输入。
+export async function listModels() {
+  return [];
+}
+
 export const meta = {
   name: 'fal.ai',
   capabilities: ['image', 'edit', 'video'],
