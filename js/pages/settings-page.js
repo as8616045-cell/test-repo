@@ -13,7 +13,7 @@ import {
   exportSettings, importSettings, clearKeys,
   BUCKETS,
   addEndpoint, removeEndpoint,
-  setCapability, detectProvider,
+  setCapability, detectProvider, normalizeBaseURL,
 } from '../settings.js';
 import { endpointsFor, pingEndpoint, protocolName, listEndpointModels, pickModelForBucket } from '../api/index.js';
 import { toast, esc, download, readJSONFile } from '../utils.js';
@@ -81,20 +81,29 @@ export async function render(host) {
    * 没识别出来 / 输入为空 时静默。这样用户不会被"未知"或"低置信度"打扰。
    */
   function refreshDetection() {
-    const url = $base.value.trim();
-    if (!url) { $line.innerHTML = ''; return; }
+    const raw = $base.value.trim();
+    if (!raw) { $line.innerHTML = ''; return; }
+    const url = normalizeBaseURL(raw);
     const det = detectProvider(url);
+
+    // 如果规范化后地址变了(用户粘了 /home /dashboard 等后台页面),明确告诉他实际会用哪个
+    const cleanedNote = (url !== raw)
+      ? `<div class="text-xs text-amber-600 mt-1">已自动修正为 <code class="kbd">${esc(url)}</code>（你粘贴的地址带了网页后台路径）</div>`
+      : '';
+
     if (det.confidence === 'high') {
       $line.innerHTML = `
         <span class="pill pill-violet">
           <span class="text-base leading-none">${esc(det.icon)}</span>
           ${esc(det.name)}
         </span>
+        ${cleanedNote}
       `;
     } else {
       // 未知 URL: 假定为 OpenAI 兼容,给一个非常含蓄的提示
       $line.innerHTML = `
         <span class="text-xs text-slate-400">将作为 OpenAI 兼容 API 处理</span>
+        ${cleanedNote}
       `;
     }
   }
@@ -102,10 +111,11 @@ export async function render(host) {
   refreshDetection();
 
   function readForm() {
-    const baseURL = $base.value.trim();
-    const apiKey  = $key.value.trim();
-    if (!baseURL) { $base.focus(); throw new Error('请填 Base URL'); }
-    if (!apiKey)  { $key.focus();  throw new Error('请填 API Key'); }
+    const rawURL = $base.value.trim();
+    const apiKey = $key.value.trim();
+    if (!rawURL) { $base.focus(); throw new Error('请填 Base URL'); }
+    if (!apiKey) { $key.focus();  throw new Error('请填 API Key'); }
+    const baseURL = normalizeBaseURL(rawURL);
     return { baseURL, apiKey, det: detectProvider(baseURL) };
   }
 
