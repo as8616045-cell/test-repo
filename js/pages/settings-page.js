@@ -300,7 +300,6 @@ export async function render(host) {
     const eps = endpointsFor(bucket);
     const cur = s.capabilities[bucket] || { endpointId: '', model: '' };
     const meta = BUCKET_META[bucket];
-    const datalistId = `models-${bucket}-${Math.random().toString(36).slice(2, 8)}`;
     const wrap = document.createElement('div');
     wrap.className = 'capability-card';
     wrap.innerHTML = `
@@ -320,16 +319,12 @@ export async function render(host) {
           <span>模型</span>
           <span class="text-[11px] font-normal" data-role="hint"></span>
         </label>
-        <input class="form-input mono" data-role="model" list="${datalistId}"
-               value="${esc(cur.model || '')}" placeholder="${esc(modelPlaceholder(bucket))}"
-               autocomplete="off" />
-        <datalist id="${datalistId}"></datalist>
+        <div data-role="model-host"></div>
       </div>
     `;
     const $ep    = wrap.querySelector('[data-role=ep]');
-    const $model = wrap.querySelector('[data-role=model]');
-    const $list  = wrap.querySelector(`#${datalistId}`);
     const $hint  = wrap.querySelector('[data-role=hint]');
+    const $host  = wrap.querySelector('[data-role=model-host]');
 
     if (!eps.length) {
       const o = document.createElement('option');
@@ -337,81 +332,186 @@ export async function render(host) {
       o.disabled = true; o.selected = true;
       $ep.appendChild(o);
       $ep.disabled = true;
-      $model.disabled = true;
-    } else {
-      let matched = false;
-      for (const ep of eps) {
-        const o = document.createElement('option');
-        o.value = ep.id;
-        o.textContent = `${ep.name} · ${protocolName(ep)}`;
-        if (ep.id === cur.endpointId) { o.selected = true; matched = true; }
-        $ep.appendChild(o);
-      }
-      if (!matched) $ep.value = eps[0].id;
+      $host.innerHTML = `<input class="form-input mono" disabled placeholder="${esc(modelPlaceholder(bucket))}" />`;
+      return wrap;
     }
 
-    /**
-     * 异步加载当前 endpoint 的真实模型列表,填进 datalist。
-     * 用户聚焦 input 时浏览器会自动展示这些选项。
-     * 标记当前模型是否在列表里:不在 -> 显示橙色警告。
-     */
-    async function loadModels() {
-      $list.innerHTML = '';
+    let matched = false;
+    for (const ep of eps) {
+      const o = document.createElement('option');
+      o.value = ep.id;
+      o.textContent = `${ep.name} · ${protocolName(ep)}`;
+      if (ep.id === cur.endpointId) { o.selected = true; matched = true; }
+      $ep.appendChild(o);
+    }
+    if (!matched) $ep.value = eps[0].id;
+
+    // 真·下拉式 model picker (替代 datalist,可点击展开 + 输入过滤)
+    const combo = createModelCombobox({
+      initialValue: cur.model || '',
+      placeholder: modelPlaceholder(bucket),
+      fetchModels: async () => {
+        const ep = s.endpoints.find(e => e.id === $ep.value);
+        if (!ep) return [];
+        return await listEndpointModels(ep);
+      },
+      onCommit: (val) => {
+        setCapability(bucket, $ep.value, val);
+        s = structuredClone(loadSettings());
+        loadHint();
+      },
+      onLoaded: () => loadHint(),
+    });
+    $host.appendChild(combo.el);
+
+    async function loadHint() {
       $hint.innerHTML = '';
       const epId = $ep.value;
-      if (!epId) return;
       const ep = s.endpoints.find(e => e.id === epId);
       if (!ep) return;
-
-      $hint.innerHTML = '<span class="text-slate-400">⏳ 拉取模型列表...</span>';
+      $hint.innerHTML = '<span class="text-slate-400">⏳ ...</span>';
       try {
         const models = await listEndpointModels(ep);
         if (!models.length) {
-          $hint.innerHTML = '<span class="text-slate-400">该协议无可列模型,请手填</span>';
+          $hint.innerHTML = '<span class="text-slate-400">该协议无可列模型</span>';
           return;
         }
-        for (const m of models) {
-          const o = document.createElement('option');
-          o.value = m.id;
-          if (m.name && m.name !== m.id) o.label = m.name;
-          $list.appendChild(o);
-        }
-        // 校验当前 model 是否真存在
         const ids = new Set(models.map(m => m.id));
-        const curVal = $model.value.trim();
+        const curVal = combo.getValue();
         if (curVal && !ids.has(curVal)) {
-          $hint.innerHTML = `<span class="text-amber-600">⚠ "${esc(curVal)}" 不在该端点的可用列表里</span>`;
-        } else if (curVal && ids.has(curVal)) {
+          $hint.innerHTML = `<span class="text-amber-600">⚠ "${esc(curVal.slice(0, 28))}${curVal.length > 28 ? '…' : ''}" 不在可用列表里</span>`;
+        } else if (curVal) {
           $hint.innerHTML = `<span class="text-emerald-600">✓ ${models.length} 个可用模型</span>`;
         } else {
-          $hint.innerHTML = `<span class="text-slate-400">${models.length} 个可用模型 (点输入框看)</span>`;
+          $hint.innerHTML = `<span class="text-slate-500">点击模型框选择 (${models.length} 个可用)</span>`;
         }
       } catch (e) {
-        $hint.innerHTML = `<span class="text-slate-400">无法拉取模型列表 (${esc(e.message?.slice(0, 30) || '')})</span>`;
+        $hint.innerHTML = `<span class="text-slate-400">无法拉取列表</span>`;
       }
     }
 
-    function commit() {
-      const epId = $ep.value;
-      let model = $model.value.trim();
-      if (!model) {
-        const ep = s.endpoints.find(e => e.id === epId);
-        const det = detectProvider(ep?.baseURL || '');
-        model = det.defaultModels?.[bucket] || '';
-        if (model) $model.value = model;
-      }
-      setCapability(bucket, epId, model);
+    $ep.onchange = () => {
+      combo.setValue('');
+      combo.invalidateModels();
+      setCapability(bucket, $ep.value, '');
       s = structuredClone(loadSettings());
-      // 重新校验 hint
-      loadModels();
-    }
-    $ep.onchange    = () => { $model.value = ''; commit(); };
-    $model.onchange = commit;
+      loadHint();
+    };
 
-    // 初始加载真实模型列表(异步,不阻塞 UI)
-    loadModels();
-
+    loadHint();
     return wrap;
+  }
+
+  /**
+   * 真·下拉式 model picker
+   * - 点击 input → 立即展开下拉(显示真实模型列表)
+   * - 输入文字 → 实时过滤
+   * - 点击下拉项 → 填入 + 收起 + commit
+   * - 失焦或点击外部 → 收起
+   * - 支持自定义值(用户键盘输入了不在列表里的值,onchange 时 commit)
+   */
+  function createModelCombobox({ initialValue, placeholder, fetchModels, onCommit, onLoaded }) {
+    const wrap = document.createElement('div');
+    wrap.className = 'combo-wrap';
+
+    const input = document.createElement('input');
+    input.className = 'form-input mono';
+    input.value = initialValue || '';
+    input.placeholder = placeholder || '';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+
+    const drop = document.createElement('div');
+    drop.className = 'combo-drop hidden';
+
+    let models = null;
+    let loading = false;
+
+    async function ensureModels(force) {
+      if (force) { models = null; loading = false; }
+      if (models != null || loading) return;
+      loading = true;
+      drop.innerHTML = '<div class="combo-msg">⏳ 拉取模型列表…</div>';
+      try {
+        models = await fetchModels();
+      } catch {
+        models = [];
+      } finally {
+        loading = false;
+      }
+      onLoaded?.(models);
+    }
+
+    function renderList(filter) {
+      drop.innerHTML = '';
+      if (!models || !models.length) {
+        drop.innerHTML = '<div class="combo-msg">该协议无可列模型 — 直接键入模型名</div>';
+        return;
+      }
+      const f = (filter || '').toLowerCase();
+      const filtered = f
+        ? models.filter(m => m.id.toLowerCase().includes(f))
+        : models;
+      if (!filtered.length) {
+        drop.innerHTML = '<div class="combo-msg">无匹配 — 你输入的内容会作为自定义模型保存</div>';
+        return;
+      }
+      const cap = 200;
+      const list = filtered.slice(0, cap);
+      for (const m of list) {
+        const it = document.createElement('div');
+        it.className = 'combo-item';
+        it.textContent = m.id;
+        it.onclick = (e) => {
+          e.stopPropagation();
+          input.value = m.id;
+          drop.classList.add('hidden');
+          onCommit?.(m.id);
+        };
+        drop.appendChild(it);
+      }
+      if (filtered.length > cap) {
+        const more = document.createElement('div');
+        more.className = 'combo-msg';
+        more.textContent = `…还有 ${filtered.length - cap} 个,继续输入筛选`;
+        drop.appendChild(more);
+      }
+    }
+
+    input.onfocus = async () => {
+      await ensureModels(false);
+      drop.classList.remove('hidden');
+      renderList(input.value);
+    };
+    input.onclick = async (e) => {
+      e.stopPropagation();
+      await ensureModels(false);
+      drop.classList.remove('hidden');
+      renderList(input.value);
+    };
+    input.oninput = () => {
+      drop.classList.remove('hidden');
+      renderList(input.value);
+    };
+    input.onkeydown = (e) => {
+      if (e.key === 'Escape') drop.classList.add('hidden');
+    };
+    input.onchange = () => onCommit?.(input.value.trim());
+
+    // 点击外部时关闭
+    document.addEventListener('click', (e) => {
+      if (!wrap.contains(e.target)) drop.classList.add('hidden');
+    });
+
+    wrap.appendChild(input);
+    wrap.appendChild(drop);
+
+    return {
+      el: wrap,
+      getValue: () => input.value.trim(),
+      setValue: (v) => { input.value = v || ''; },
+      invalidateModels: () => { models = null; },
+    };
   }
 
   /* ───────────────────── ④ 通用 ───────────────────── */

@@ -215,9 +215,22 @@ export function pickModelForBucket(modelList, bucket) {
       // Google
       /gemini.*pro/i, /gemini.*flash/i, /gemini/i,
       // Qwen VL
-      /qwen.*vl/i, /qwen2.*vl/i,
+      /qwen.*vl/i, /qwen2.*vl/i, /qwen-vl/i,
+      // Moonshot / Kimi (vision 优先, 然后 K2 等通用)
+      /moonshot.*vl/i, /kimi.*vl/i, /kimi.*v\d/i,
+      /moonshot/i, /kimi/i,
+      // DeepSeek VL
+      /deepseek.*vl/i, /deepseek-vl/i,
+      // Yi VL
+      /yi.*vl/i, /01-ai\/yi.*vl/i,
+      // GLM Vision
+      /glm.*v\d/i, /glm.*-v$/i, /chatglm.*v/i,
+      // InternVL / Llama Vision / Pixtral
+      /intern.*vl/i, /llama.*vision/i, /pixtral/i,
       // 其他通用 vision 关键词
-      /vision/i, /vl-\d/i, /-vl$/i,
+      /vision/i, /vl-?\d/i, /-vl$/i, /vl$/i, /-vlm/i,
+      // 兜底: 任何 chat / instruct 模型 (反推可能失败但用户能立即诊断)
+      /chat/i, /instruct/i,
     ]);
   }
   if (bucket === 'image') {
