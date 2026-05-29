@@ -77,21 +77,28 @@ export const DEFAULT_SETTINGS = {
 /**
  * 规范化用户粘贴的 baseURL。
  *
- * 用户经常直接从浏览器地址栏复制中转站的"网页后台"地址,比如
- *   https://www.right.codes/home
- *   https://www.right.codes/api-keys
- *   https://xxx.com/panel  /  /dashboard  /  /#/login  /  /token
- * 这些路径段都是 Web UI,不是 API 根地址。直接往后拼 /v1/models 会得到
- *   https://www.right.codes/api-keys/v1/models  → 404 No static resource
+ * 用户经常直接从浏览器地址栏复制中转站的"网页后台"页面地址,比如
+ *   https://www.right.codes/home  /  /api-keys  /  /draw  /  /panel  /  /#/login
+ * 这些是网站页面,不是 API 地址。
  *
- * 判断逻辑(对 OpenAI 兼容中转站):
- *   API 根地址要么是裸域名,要么带版本号前缀(/v1、/api/v3、.../llm/v1)。
- *   所以:
- *     · 路径里含版本号段(/vN、/vNbeta)→ 视为真实 API 前缀,保留
- *     · 路径里含 openai 段(如 /proxy/openai)→ 保留
- *     · 其它任何路径(/home、/api-keys、/panel…)→ 一律砍到域名根
- *   这样不必穷举后台页面名字,新出现的后台路由也能自动处理。
+ * ⚠️ 难点:无法靠通用规则区分"网页页面"和"API 路径前缀"。
+ *   例如 right.codes 的 API 真身是 https://www.right.codes/codex/v1 ——
+ *   `/codex` 是必须保留的 API 前缀,但它和 `/draw` 这种页面长得一模一样。
+ *   所以这里采取"保守去噪"策略:
+ *     · 去掉结尾斜杠 / hash 路由 / 查询串
+ *     · 只剥离结尾那些【明确是网页页面、绝不可能是 API 前缀】的词
+ *       (home/login/dashboard/panel 等),用白名单式 denylist
+ *     · 其它路径段(包括 /codex、/v1、/proxy 等)一律原样保留
+ *   宁可少剥(让用户按提示补全 /v1),也不要错剥真实 API 前缀。
  */
+const DASHBOARD_SEGMENTS = new RegExp(
+  '\\/(home|dashboard|panel|console|login|logout|register|signin|signup|' +
+  'index(?:\\.html?)?|profile|settings?|tokens?|api-?keys?|keys|account|' +
+  'topup|recharge|wallet|billing|usage|pricing|about|docs?|help|user|users|' +
+  'admin|draw|midjourney|chat|playground|log|logs)$',
+  'i'
+);
+
 export function normalizeBaseURL(url) {
   let u = String(url || '').trim();
   if (!u) return u;
@@ -99,20 +106,14 @@ export function normalizeBaseURL(url) {
   u = u.replace(/#.*$/, '').replace(/\?.*$/, '').replace(/\/+$/, '');
   if (!u) return u;
 
-  // 拆出 origin(协议+域名) 和 path
-  const m = /^(https?:\/\/[^/]+)(\/.*)?$/i.exec(u);
-  if (!m) return u; // 没带 http(s):// 前缀的非标准输入,原样返回
-  const origin = m[1];
-  const path = (m[2] || '').replace(/\/+$/, '');
-  if (!path) return origin;
+  // 反复剥离结尾的"明确网页页面"段(大小写不敏感),但保留 /codex /v1 等真实前缀
+  let prev;
+  do {
+    prev = u;
+    u = u.replace(DASHBOARD_SEGMENTS, '').replace(/\/+$/, '');
+  } while (u !== prev);
 
-  // 真实 API 路径前缀:含版本号段(/vN、/vNbeta)或 openai 段 → 保留完整路径
-  const looksLikeApiPath =
-    /(^|\/)v\d+(beta)?(\/|$)/i.test(path) ||
-    /(^|\/)openai(\/|$)/i.test(path);
-
-  // 否则路径是网页后台路由 → 砍到域名根(OpenAI 兼容中转站的 API 就在根的 /v1)
-  return looksLikeApiPath ? origin + path : origin;
+  return u;
 }
 
 /**
