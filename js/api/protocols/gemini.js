@@ -93,6 +93,28 @@ export async function generateVideo() {
   throw new Error('Gemini 协议暂不支持视频生成（Veo 未开放给所有 Key）');
 }
 
+/* ───────────────── list models ───────────────── */
+
+export async function listModels(endpoint) {
+  const base = (endpoint.baseURL || '').replace(/\/+$/, '');
+  const url = withProxy(`${base}/models?key=${encodeURIComponent(endpoint.apiKey)}`);
+  const r = await fetch(url, { method: 'GET' });
+  if (!r.ok) {
+    let msg = `${r.status}`;
+    try { const j = await r.json(); msg += ': ' + (j?.error?.message || ''); } catch {}
+    throw new Error(msg);
+  }
+  const j = await r.json();
+  const models = j?.models || [];
+  return models
+    .map(m => {
+      const id = (m.name || '').replace(/^models\//, '');
+      if (!id) return null;
+      return { id, name: m.displayName ? `${id} (${m.displayName})` : id };
+    })
+    .filter(Boolean);
+}
+
 export const meta = {
   name: 'Google Gemini',
   capabilities: ['vision', 'chat', 'image', 'edit'],

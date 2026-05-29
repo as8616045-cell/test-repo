@@ -167,6 +167,76 @@ export async function pingEndpoint(endpoint) {
   return proto.meta.ping(ep);
 }
 
+/**
+ * 列出端点上真实可用的模型列表。
+ *
+ * - OpenAI 兼容: 走 GET /v1/models（OpenAI / DeepSeek / SiliconFlow /
+ *   火山方舟 / OneAPI / NewAPI / 任何中转站都支持）
+ * - Gemini: 走 GET /models?key=...
+ * - fal.ai: 没有公开的 listing API,返回空
+ *
+ * 失败时抛错;连不上 / Key 无效 / 协议不支持时由调用方捕获。
+ * 返回 [{ id, name }, ...]。
+ */
+export async function listEndpointModels(endpoint) {
+  if (!endpoint?.baseURL || !endpoint?.apiKey) return [];
+  const proto = getProtocol(endpoint);
+  if (!proto?.listModels) return [];
+  return proto.listModels(endpoint);
+}
+
+/**
+ * 给定真实模型列表 + 桶类型, 用一组优先级正则挑出最合适的模型。
+ *
+ * - LLM 桶: 优先选 vision-capable 的 chat 模型(反推需要看图)
+ * - 图片桶: 优先选明确的图像生成模型
+ *
+ * 找不到匹配时返回 null —— 调用方决定 fallback (可能给 list[0] 或保留旧值)。
+ */
+export function pickModelForBucket(modelList, bucket) {
+  const ids = modelList.map(m => m.id);
+  // 多模型按 id 匹配;返回第一个匹配的真实 id
+  const find = (patterns) => {
+    for (const p of patterns) {
+      const id = ids.find(x => p.test(x));
+      if (id) return id;
+    }
+    return null;
+  };
+
+  if (bucket === 'llm') {
+    return find([
+      // 火山方舟 vision 模型
+      /doubao.*vision/i, /seed.*vision/i, /seed-1-6-vision/i,
+      // OpenAI vision-capable
+      /^gpt-4o(?!-mini)/i, /^gpt-4-turbo/i, /^gpt-4o/i,
+      // Anthropic
+      /claude.*opus/i, /claude.*sonnet/i, /claude.*haiku/i, /claude/i,
+      // Google
+      /gemini.*pro/i, /gemini.*flash/i, /gemini/i,
+      // Qwen VL
+      /qwen.*vl/i, /qwen2.*vl/i,
+      // 其他通用 vision 关键词
+      /vision/i, /vl-\d/i, /-vl$/i,
+    ]);
+  }
+  if (bucket === 'image') {
+    return find([
+      // 火山方舟 seedream / 即梦
+      /seedream/i, /doubao.*image/i, /seed.*image/i,
+      // OpenAI
+      /^gpt-image/i, /dall-e-3/i, /dall-e/i,
+      // Google Imagen
+      /imagen/i, /gemini.*image/i,
+      // SiliconFlow
+      /kolors/i,
+      // Flux / Stable Diffusion
+      /flux.*pro/i, /flux/i, /sd3/i, /sdxl/i, /stable.*diffusion/i,
+    ]);
+  }
+  return null;
+}
+
 /** 给定端点列出协议名称（UI 用） */
 export function protocolName(endpoint) {
   return getProtocol(endpoint)?.meta?.name || 'Unknown';

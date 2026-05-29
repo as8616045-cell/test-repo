@@ -248,6 +248,29 @@ export async function generateVideo(endpoint, model, opts = {}, { signal, onProg
   throw new Error('视频任务超时');
 }
 
+/* ───────────────── list models ─────────────────
+ *
+ * GET /v1/models —— OpenAI 官方、火山方舟、DeepSeek、SiliconFlow、
+ * 任何 OneAPI/NewAPI 中转站都支持。返回 [{ id, name }, ...]。
+ * 失败时抛错。
+ */
+export async function listModels(endpoint) {
+  const r = await fetch(withProxy(buildURL(endpoint, '/v1/models')), {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${endpoint.apiKey}` },
+  });
+  if (!r.ok) await throwHTTP(r);
+  const j = await r.json();
+  const list = j?.data || j?.models || j;
+  if (!Array.isArray(list)) return [];
+  return list
+    .map(m => {
+      const id = typeof m === 'string' ? m : (m.id || m.name || m.model);
+      return id ? { id, name: id } : null;
+    })
+    .filter(Boolean);
+}
+
 /* ───────────────── meta + ping ───────────────── */
 
 export const meta = {
